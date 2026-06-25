@@ -47,6 +47,13 @@ _QUEUED: set[str] = set()
 _QLOCK = threading.Lock()
 _WORKER_STARTED = False
 
+# Scanner de fond : parcourt les dossiers (potentiellement lent sur reseau) HORS
+# de la requete. L'endpoint renvoie alors l'instantane en cache, instantanement.
+_ORDER: list[str] = []          # ids tries du plus recent au plus ancien
+_ORDER_LOCK = threading.Lock()
+_SCAN_DONE = False              # un premier scan a-t-il abouti ?
+_SCANNER_STARTED = False
+
 
 def _all_labels() -> dict:
     return {**TYPE_LABELS, **custom_types.labels()}
@@ -184,12 +191,11 @@ def _ensure_worker() -> None:
         threading.Thread(target=_worker, daemon=True).start()
 
 
-def list_exams() -> list[dict]:
-    """Examens des dossiers actives, du plus recent au plus ancien (LISTING RAPIDE).
-
-    Ne lit aucun PDF : les nouveaux examens sont mis en file pour anonymisation
-    en tache de fond (la coche apparait ensuite, scan apres scan)."""
-    light: list[dict] = []
+def _scan_once() -> None:
+    """Parcourt les dossiers actives (potentiellement lent), met a jour le cache
+    + l'ordre + la file d'anonymisation. Ne lit aucun PDF (metadonnees seules)."""
+    global _SCAN_DONE
+    pairs: list[tuple[float, str]] = []   # (mtime, id) pour le tri
     seen_ids: set[str] = set()
     for entry in _enabled_watch():
         directory = Path(str(entry.get("directory", "")))
@@ -214,22 +220,68 @@ def list_exams() -> list[dict]:
                     _CACHE[eid] = rec
                 else:
                     rec["has_cr"] = _cr_path(pdf).exists()
-                snapshot = dict(rec)
-            light.append(snapshot)
+            pairs.append((st.st_mtime, eid))
 
-    light.sort(key=lambda x: x["mtime"], reverse=True)
-    light = light[:MAX_LIST]
+    pairs.sort(key=lambda x: x[0], reverse=True)
+    order = [eid for _m, eid in pairs[:MAX_LIST]]
+    with _ORDER_LOCK:
+        _ORDER[:] = order
+    _SCAN_DONE = True
 
     # Met en file (du plus recent au plus ancien) les examens pas encore anonymises.
-    for rec in light:
-        if rec["pending"] and not rec["anonymized"] and not rec["error"]:
-            _enqueue(rec["id"])
+    for eid in order:
+        with _LOCK:
+            rec = _CACHE.get(eid)
+        if rec and rec["pending"] and not rec["anonymized"] and not rec["error"]:
+            _enqueue(eid)
 
-    return [{
-        "id": r["id"], "name": r["name"], "folder": r["folder"], "mtime": r["mtime"],
-        "anonymized": r["anonymized"], "pending": r["pending"], "error": r["error"],
-        "type_label": r["type_label"], "summary": r["summary"], "has_cr": r["has_cr"],
-    } for r in light]
+
+def _scan_interval() -> int:
+    try:
+        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        return max(4, int(cfg.get("poll_interval_seconds", 10)))
+    except (FileNotFoundError, json.JSONDecodeError, ValueError, TypeError):
+        return 10
+
+
+def _scanner() -> None:
+    while True:
+        try:
+            _scan_once()
+        except Exception:  # noqa: BLE001 — un scan ne doit jamais tuer la boucle
+            pass
+        time.sleep(_scan_interval())
+
+
+def _ensure_scanner() -> None:
+    global _SCANNER_STARTED
+    if not _SCANNER_STARTED:
+        _SCANNER_STARTED = True
+        threading.Thread(target=_scanner, daemon=True).start()
+
+
+def scanning() -> bool:
+    """True tant qu'aucun premier scan n'a abouti (affichage 'analyse en cours')."""
+    return not _SCAN_DONE
+
+
+def list_exams() -> list[dict]:
+    """Renvoie INSTANTANEMENT le dernier instantane (le scan tourne en fond)."""
+    _ensure_scanner()
+    with _ORDER_LOCK:
+        ids = list(_ORDER)
+    out: list[dict] = []
+    with _LOCK:
+        for eid in ids:
+            r = _CACHE.get(eid)
+            if not r:
+                continue
+            out.append({
+                "id": r["id"], "name": r["name"], "folder": r["folder"], "mtime": r["mtime"],
+                "anonymized": r["anonymized"], "pending": r["pending"], "error": r["error"],
+                "type_label": r["type_label"], "summary": r["summary"], "has_cr": r["has_cr"],
+            })
+    return out
 
 
 def _find(eid: str) -> dict | None:
@@ -237,7 +289,7 @@ def _find(eid: str) -> dict | None:
         rec = _CACHE.get(eid)
     if rec and Path(rec["path"]).exists():
         return rec
-    list_exams()  # reconstruit le cache (id inconnu / serveur redemarre)
+    _scan_once()  # reconstruit le cache (id inconnu / serveur redemarre)
     with _LOCK:
         return _CACHE.get(eid)
 
@@ -309,3 +361,8 @@ def generate_cr(eid: str, observations: str | None) -> dict:
     except OSError:
         pass
     return {"report": report, "cr_filename": cr_file.name}
+
+
+# Demarre le scan de fond des l'import (prechauffage) : la liste est prete avant
+# meme que l'utilisateur n'ouvre l'onglet Workflow.
+_ensure_scanner()

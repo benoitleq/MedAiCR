@@ -300,8 +300,8 @@ def generate_endpoint(payload: dict = Body(...)) -> dict:
 
 @app.get("/api/workflow/exams")
 def workflow_exams() -> dict:
-    """Examens des dossiers actives, du plus recent au plus ancien."""
-    return {"exams": workflow.list_exams()}
+    """Examens des dossiers actives, du plus recent au plus ancien (cache instantane)."""
+    return {"exams": workflow.list_exams(), "scanning": workflow.scanning()}
 
 
 @app.get("/api/workflow/exam/{exam_id}")

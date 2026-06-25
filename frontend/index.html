@@ -1030,7 +1030,7 @@ async function loadWorkflow(){
   wfLoading = true;
   try {
     const d = await (await fetch('/api/workflow/exams')).json();
-    renderWfList(d.exams || []);
+    renderWfList(d.exams || [], d.scanning);
   } catch(e){
     $('wfStatus').innerHTML = '<span class="exists-no">Erreur : '+esc(e.message)+'</span>';
   } finally {
@@ -1038,13 +1038,18 @@ async function loadWorkflow(){
   }
 }
 
-function renderWfList(exams){
+function renderWfList(exams, scanning){
   const n = exams.length;
   const done = exams.filter(e => e.anonymized).length;
   $('wfStatus').textContent = n
     ? `${n} examen(s) · ${done} anonymisé(s)`
-    : 'Aucun examen dans les dossiers surveillés activés.';
-  if (!n){ $('wfItems').innerHTML = '<div class="wf-empty">Dépose un PDF dans un dossier suivi (coché en Configuration) : il apparaîtra ici.</div>'; return; }
+    : (scanning ? '⏳ Analyse des dossiers en cours…' : 'Aucun examen dans les dossiers surveillés activés.');
+  if (!n){
+    $('wfItems').innerHTML = scanning
+      ? '<div class="wf-empty">⏳ Analyse des dossiers surveillés en cours…</div>'
+      : '<div class="wf-empty">Dépose un PDF dans un dossier suivi (coché en Configuration) : il apparaîtra ici.</div>';
+    return;
+  }
 
   $('wfItems').innerHTML = exams.map(e => {
     const status = e.anonymized
