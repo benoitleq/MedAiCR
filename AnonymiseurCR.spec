@@ -26,7 +26,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=['tkinter', 'matplotlib', 'numpy.tests'],
+    excludes=['matplotlib', 'numpy.tests'],  # tkinter requis : selecteur de dossier natif (/api/pick-folder)
     noarchive=False,
 )
 
@@ -38,7 +38,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='AnonymiseurCR',
+    name='MedAiCR',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

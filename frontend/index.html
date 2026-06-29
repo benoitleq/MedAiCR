@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <link rel="icon" href="/favicon.ico" />
-<title>Aide à la rédaction de comptes rendus</title>
+<title>MedAiCR — Aide à la rédaction de comptes rendus</title>
 <style>
   :root {
     --bg: #0f172a; --card: #1e293b; --card2: #243043; --line: #334155;
@@ -137,7 +137,7 @@
 </head>
 <body>
 <header>
-  <h1>🩺 Aide à la rédaction de comptes rendus médicaux</h1>
+  <h1>🩺 MedAiCR — Aide à la rédaction de comptes rendus médicaux</h1>
   <span class="badge">● Anonymisation 100 % locale — la génération IA (optionnelle) envoie le texte <b>anonymisé</b> au fournisseur choisi</span>
   <nav class="tabs-nav">
     <button class="navtab active" data-view="work">🗂 Workflow</button>
@@ -316,6 +316,25 @@
  <div id="viewConfig" style="display:none">
   <div class="grid" style="grid-template-columns:1fr;">
     <section class="card">
+      <h2>💾 Sauvegarde / restauration de la configuration</h2>
+      <p class="hint">
+        Exporte (ou réimporte) toute ta configuration dans un seul fichier :
+        dossiers surveillés, réglages IA + <b>prompts système</b> + clé API, et
+        <b>types d'examens personnalisés</b>. Pratique après une réinstallation.
+      </p>
+      <div class="spacer"></div>
+      <div class="row">
+        <button id="cfgBackup">⬇ Sauvegarder dans un fichier</button>
+        <button class="secondary" id="cfgRestore">⬆ Restaurer depuis un fichier</button>
+        <input type="file" id="cfgRestoreFile" accept=".json,application/json" style="display:none" />
+      </div>
+      <div class="cfg-msg" id="cfgBackupMsg"></div>
+      <div class="note" style="margin-top:12px">
+        ⚠ Le fichier de sauvegarde contient ta <b>clé API</b> en clair — conserve-le en lieu sûr.
+      </div>
+    </section>
+
+    <section class="card">
       <h2>⚙ Surveillance automatique de dossiers</h2>
       <p class="hint">
         Définis les dossiers à surveiller. Dès qu'un PDF y est déposé, une version
@@ -349,7 +368,7 @@
 
       <div class="note" style="margin-top:16px">
         ⓘ Pour que la surveillance tourne, l'application doit être lancée (icône
-        « Anonymiseur CR ») ou le raccourci « Surveiller dossiers CR ». Type
+        « MedAiCR ») ou le raccourci « Surveiller dossiers CR ». Type
         <b>Détection automatique</b> = le type de CR est deviné d'après le contenu.
       </div>
     </section>
@@ -1188,7 +1207,10 @@ function addCfgRow(entry){
   row.className = 'cfg-row';
   row.innerHTML = `
     <div>
-      <input type="text" class="cfg-dir" placeholder="\\\\SERVEUR\\dossier  ou  C:/chemin/dossier" value="${esc(entry.directory)}" />
+      <div style="display:flex; gap:6px;">
+        <input type="text" class="cfg-dir" placeholder="\\\\SERVEUR\\dossier  ou  C:/chemin/dossier" value="${esc(entry.directory)}" style="flex:1; min-width:0" />
+        <button type="button" class="cfg-browse secondary" title="Parcourir…" style="width:auto; white-space:nowrap; padding:7px 12px">📁</button>
+      </div>
       <div class="cfg-exists"></div>
     </div>
     <select class="cfg-type">${typeOptions(entry.cr_type)}</select>
@@ -1196,10 +1218,30 @@ function addCfgRow(entry){
     <label class="cfg-enabled"><input type="checkbox" class="cfg-rec" ${entry.recursive!==false?'checked':''}/> oui</label>
     <button class="cfg-del" title="Supprimer">✕</button>`;
   const ex = row.querySelector('.cfg-exists');
+  const dir = row.querySelector('.cfg-dir');
   if (entry.directory){
     ex.textContent = entry.exists ? '✓ dossier trouvé' : '⚠ dossier introuvable (sera créé)';
     ex.className = 'cfg-exists ' + (entry.exists ? 'exists-ok' : 'exists-no');
   }
+  const browse = row.querySelector('.cfg-browse');
+  browse.onclick = async () => {
+    const prev = browse.textContent;
+    browse.disabled = true; browse.textContent = '…';
+    try {
+      const r = await fetch('/api/pick-folder', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ initial: dir.value.trim() })
+      });
+      const d = await r.json();
+      if (!r.ok){ ex.textContent = d.detail || 'Sélecteur indisponible'; ex.className = 'cfg-exists exists-no'; }
+      else if (d.path){ dir.value = d.path; ex.textContent = '✓ dossier trouvé'; ex.className = 'cfg-exists exists-ok'; }
+      // d.path vide = l'utilisateur a annulé : on ne touche à rien
+    } catch(e){
+      ex.textContent = 'Erreur : ' + e.message; ex.className = 'cfg-exists exists-no';
+    } finally {
+      browse.disabled = false; browse.textContent = prev;
+    }
+  };
   row.querySelector('.cfg-del').onclick = () => row.remove();
   $('cfgRows').appendChild(row);
 }
@@ -1244,6 +1286,37 @@ $('cfgSave').onclick = async () => {
     loadConfig(); // rafraîchit l'état "dossier trouvé"
   } catch(e){
     $('cfgMsg').innerHTML = '<span class="exists-no">Erreur réseau : '+esc(e.message)+'</span>';
+  }
+};
+
+// --- Sauvegarde / restauration de toute la configuration ---
+$('cfgBackup').onclick = () => {
+  const a = document.createElement('a');
+  a.href = '/api/config/export';
+  document.body.appendChild(a); a.click(); a.remove();
+  $('cfgBackupMsg').innerHTML = '<span class="exists-ok">✓ Fichier de sauvegarde téléchargé.</span>';
+};
+$('cfgRestore').onclick = () => $('cfgRestoreFile').click();
+$('cfgRestoreFile').onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  $('cfgBackupMsg').textContent = 'Restauration…';
+  try {
+    let bundle;
+    try { bundle = JSON.parse(await file.text()); }
+    catch { $('cfgBackupMsg').innerHTML = '<span class="exists-no">Fichier illisible (JSON attendu).</span>'; return; }
+    const r = await fetch('/api/config/import', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(bundle)
+    });
+    const d = await r.json();
+    if (!r.ok){ $('cfgBackupMsg').innerHTML = '<span class="exists-no">'+esc(d.detail||'Erreur')+'</span>'; return; }
+    $('cfgBackupMsg').innerHTML = '<span class="exists-ok">✓ Configuration restaurée ('+(d.restored||[]).join(', ')+').</span>';
+    await loadConfig();      // dossiers + types
+    loadLlmConfig();         // fournisseurs, clé API, prompts système
+  } catch(err){
+    $('cfgBackupMsg').innerHTML = '<span class="exists-no">Erreur : '+esc(err.message)+'</span>';
+  } finally {
+    e.target.value = '';     // permet de réimporter le même fichier
   }
 };
 </script>

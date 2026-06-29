@@ -9,23 +9,25 @@ ou bien le script run.bat a la racine du projet.
 from __future__ import annotations
 
 import base64
+import datetime
 import json
+import threading
 from pathlib import Path
 
 from fastapi import Body, FastAPI, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import custom_types
 import llm
 import worklist as workflow  # nom de fichier "worklist" : evite le hook PyInstaller du paquet PyPI "workflow"
 from anonymizer import anonymize, anonymize_with_spec, summarize
-from appconfig import CONFIG_FILE, FRONTEND_DIR, ICON_FILE
+from appconfig import CONFIG_FILE, CUSTOM_TYPES_FILE, FRONTEND_DIR, ICON_FILE, LLM_FILE
 from pdf_extract import extract_text, looks_like_scan
 from pdf_redact import redact_pdf, redact_pdf_spec
 from rules import TYPE_LABELS
 
-app = FastAPI(title="Anonymiseur CR", version="0.1.0")
+app = FastAPI(title="MedAiCR", version="1.1.0")
 
 
 def all_type_labels() -> dict:
@@ -140,6 +142,110 @@ def save_config(payload: dict = Body(...)) -> dict:
         json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return {"ok": True, "warnings": warnings, "saved": len(clean_watch)}
+
+
+@app.post("/api/pick-folder")
+def pick_folder(payload: dict = Body(default={})) -> dict:
+    """Ouvre une boite de dialogue NATIVE (cote serveur = poste local) pour choisir
+    un dossier, et renvoie son chemin. L'app etant locale (127.0.0.1), la fenetre
+    s'affiche sur l'ecran de l'utilisateur. Renvoie {"path": ""} si annule."""
+    initial = str((payload or {}).get("initial", "")).strip()
+    result: dict = {}
+
+    def _ask() -> None:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)  # devant le navigateur
+            chosen = filedialog.askdirectory(
+                title="Choisir le dossier a surveiller",
+                initialdir=initial or None,
+            )
+            root.destroy()
+            result["path"] = chosen or ""
+        except Exception as exc:  # tkinter absent / pas d'affichage
+            result["error"] = str(exc)
+
+    # Tkinter n'est pas thread-safe : on l'isole dans un thread dedie, cree/utilise/
+    # detruit au meme endroit, et on attend sa fin.
+    t = threading.Thread(target=_ask)
+    t.start()
+    t.join()
+
+    if "error" in result:
+        raise HTTPException(
+            500,
+            "Selecteur de dossier indisponible sur ce poste — collez le chemin "
+            f"manuellement. ({result['error']})",
+        )
+    path = result.get("path", "")
+    if path:
+        path = str(Path(path))  # normalise en separateurs Windows
+    return {"path": path}
+
+
+# --------------------------------------------------------------------------
+# Sauvegarde / restauration de TOUTE la configuration en un seul fichier :
+# dossiers surveilles (config.json), reglages IA + prompts systeme + cle API
+# (llm.json), types d'examens personnalises (custom_types.json). Pratique apres
+# une reinstallation (les donnees vivent dans %LOCALAPPDATA%\MedAiCR).
+# --------------------------------------------------------------------------
+
+_BACKUP_FILES = {
+    "config": CONFIG_FILE,
+    "llm": LLM_FILE,
+    "custom_types": CUSTOM_TYPES_FILE,
+}
+_BACKUP_APP = "MedAiCR"
+
+
+def _read_json_file(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+@app.get("/api/config/export")
+def export_config() -> Response:
+    """Renvoie un fichier JSON unique regroupant toute la configuration."""
+    bundle = {
+        "app": _BACKUP_APP,
+        "format": 1,
+        "exported_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        **{key: _read_json_file(path) for key, path in _BACKUP_FILES.items()},
+    }
+    data = json.dumps(bundle, ensure_ascii=False, indent=2)
+    fname = "MedAiCR_config_" + datetime.datetime.now().strftime("%Y%m%d_%H%M") + ".json"
+    return Response(
+        content=data,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.post("/api/config/import")
+def import_config(payload: dict = Body(...)) -> dict:
+    """Restaure la configuration depuis un fichier de sauvegarde MedAiCR.
+
+    Chaque section presente (dict) est reecrite ; les autres sont laissees telles
+    quelles. Les fichiers sont relus a chaud (scanner, IA, types) -> pas besoin
+    de redemarrer."""
+    if not isinstance(payload, dict) or payload.get("app") != _BACKUP_APP:
+        raise HTTPException(400, "Fichier de sauvegarde MedAiCR invalide.")
+    restored: list[str] = []
+    for key, path in _BACKUP_FILES.items():
+        section = payload.get(key)
+        if isinstance(section, dict):
+            path.write_text(
+                json.dumps(section, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            restored.append(key)
+    if not restored:
+        raise HTTPException(400, "Aucune section de configuration valide dans le fichier.")
+    return {"ok": True, "restored": restored}
 
 
 # --------------------------------------------------------------------------

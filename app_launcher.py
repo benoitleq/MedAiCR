@@ -51,7 +51,7 @@ def main() -> None:
     threading.Thread(target=_open_browser, daemon=True).start()
 
     print("=" * 52)
-    print("  Anonymiseur de comptes rendus medicaux")
+    print("  MedAiCR - Anonymiseur de comptes rendus medicaux")
     print(f"  Interface : {URL}")
     print("  Surveillance des dossiers : active")
     print("  Fermez cette fenetre pour quitter l'application.")

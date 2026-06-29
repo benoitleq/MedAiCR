@@ -1,21 +1,21 @@
-; Installeur Windows pour l'Anonymiseur de CR (genere avec Inno Setup 6).
+; Installeur Windows pour MedAiCR (genere avec Inno Setup 6).
 ; Compiler : "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 
-#define MyAppName "Anonymiseur CR"
-#define MyAppVersion "1.0.0"
-#define MyAppPublisher "Anonymiseur CR"
-#define MyAppExe "AnonymiseurCR.exe"
+#define MyAppName "MedAiCR"
+#define MyAppVersion "1.1.0"
+#define MyAppPublisher "MedAiCR"
+#define MyAppExe "MedAiCR.exe"
 
 [Setup]
 AppId={{B3F4B0C2-3A7E-4E2A-9C1D-1A2B3C4D5E6F}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={autopf}\AnonymiseurCR
+DefaultDirName={autopf}\MedAiCR
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=installer
-OutputBaseFilename=AnonymiseurCR_Setup_{#MyAppVersion}
+OutputBaseFilename=MedAiCR_Setup_{#MyAppVersion}
 SetupIconFile=anonymiseur.ico
 UninstallDisplayIcon={app}\{#MyAppExe}
 Compression=lzma2
@@ -34,7 +34,7 @@ Name: "french"; MessagesFile: "compiler:Languages\French.isl"
 Name: "desktopicon"; Description: "Créer un raccourci sur le Bureau"; GroupDescription: "Raccourcis :"; Flags: checkedonce
 
 [Files]
-Source: "dist\AnonymiseurCR.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\MedAiCR.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "anonymiseur.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 

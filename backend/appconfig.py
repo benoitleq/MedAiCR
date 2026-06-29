@@ -14,7 +14,7 @@ import os
 import sys
 from pathlib import Path
 
-APP_NAME = "AnonymiseurCR"
+APP_NAME = "MedAiCR"
 
 
 def _frozen() -> bool:

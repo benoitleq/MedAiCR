@@ -54,6 +54,32 @@ _ORDER_LOCK = threading.Lock()
 _SCAN_DONE = False              # un premier scan a-t-il abouti ?
 _SCANNER_STARTED = False
 
+# Ligne de base = "anteriorite" : ids des PDF deja presents A L'OUVERTURE du
+# logiciel. Le Workflow ne prend ensuite en compte QUE les examens APPARUS apres ;
+# l'anteriorite (souvent des milliers de fichiers sur un partage reseau) n'est
+# jamais re-anonymisee. Comparaison par chemin (pas par mtime) -> robuste au
+# decalage d'horloge poste/serveur.
+#
+# Figee PAR DOSSIER, et seulement quand le dossier est REELLEMENT lisible :
+#   - partage reseau coupe au demarrage -> sa baseline n'est pas figee, on
+#     retente ; a son retour on n'anonymise pas tout le stock ;
+#   - dossier ajoute en cours de session -> son stock existant devient son
+#     anteriorite (pas traite comme "nouveau").
+_BASELINE: set[str] = set()          # eids de l'anteriorite (cumul tous dossiers)
+_BASELINED_DIRS: set[str] = set()    # dossiers dont l'anteriorite est deja figee
+
+# Optimisation du scan : reparcourir un dossier coute cher sur un partage reseau
+# (des milliers de sous-dossiers). Or un nouvel examen = nouvelle entree dans le
+# dossier surveille -> sa mtime racine change. On memorise donc, par dossier, la
+# mtime de la racine + les examens (pairs) trouves au dernier parcours ; tant que
+# la mtime racine ne bouge pas, on REUTILISE ce resultat sans reparcourir.
+# Un parcours complet de securite est force periodiquement (deletions, fichiers
+# deposes en profondeur dans un sous-dossier deja existant...).
+_DIR_STATE: dict[str, dict] = {}     # root -> {"mtime": float, "pairs": [(mtime, eid)]}
+_SCAN_COUNT = 0
+_FORCE_FULL_EVERY = 40               # ~ toutes les ~2 min a 3s/scan : re-walk complet
+_SCAN_IDLE_SECONDS = 3               # cadence : le scan "a vide" est quasi instantane
+
 
 def _all_labels() -> dict:
     return {**TYPE_LABELS, **custom_types.labels()}
@@ -193,22 +219,55 @@ def _ensure_worker() -> None:
 
 def _scan_once() -> None:
     """Parcourt les dossiers actives (potentiellement lent), met a jour le cache
-    + l'ordre + la file d'anonymisation. Ne lit aucun PDF (metadonnees seules)."""
-    global _SCAN_DONE
+    + l'ordre + la file d'anonymisation. Ne lit aucun PDF (metadonnees seules).
+
+    A la 1ere lecture REUSSIE d'un dossier (= ouverture du logiciel, ou ajout du
+    dossier), on fige son anteriorite et on ne liste rien de lui. Ensuite, seuls
+    ses fichiers APPARUS depuis (absents de la baseline) entrent dans le Workflow.
+
+    Cout maitrise : un dossier dont la mtime racine n'a pas bouge n'est PAS
+    reparcouru (on reutilise le resultat precedent). Parcours complet force tous
+    les _FORCE_FULL_EVERY scans (filet de securite)."""
+    global _SCAN_DONE, _SCAN_COUNT
+    _SCAN_COUNT += 1
+    force_full = (_SCAN_COUNT % _FORCE_FULL_EVERY == 0)
     pairs: list[tuple[float, str]] = []   # (mtime, id) pour le tri
     seen_ids: set[str] = set()
     for entry in _enabled_watch():
         directory = Path(str(entry.get("directory", "")))
         if not directory.is_dir():
+            continue  # injoignable : baseline NON figee, on retentera au prochain scan
+        root = str(directory)
+        try:
+            root_mtime = directory.stat().st_mtime
+        except OSError:
             continue
+        dir_first = root not in _BASELINED_DIRS  # 1ere lecture reussie de ce dossier
+        state = _DIR_STATE.get(root)
+
+        # Rien n'a change a la racine -> on reutilise le dernier parcours (pas de
+        # walk recursif, instantane), sauf 1ere lecture ou re-scan force.
+        if state is not None and not dir_first and not force_full \
+                and state["mtime"] == root_mtime:
+            for m, eid in state["pairs"]:
+                if eid not in seen_ids:
+                    seen_ids.add(eid)
+                    pairs.append((m, eid))
+            continue
+
         cr_type = entry.get("cr_type", "auto")
         recursive = bool(entry.get("recursive", True))
-        root = str(directory)
+        dir_pairs: list[tuple[float, str]] = []
         for pdf in _candidates(directory, recursive):
             eid = _exam_id(pdf)
             if eid in seen_ids:
                 continue
             seen_ids.add(eid)
+            if dir_first:
+                _BASELINE.add(eid)   # present a l'ouverture -> anteriorite, jamais traite
+                continue
+            if eid in _BASELINE:
+                continue
             try:
                 st = pdf.stat()
             except OSError:
@@ -220,7 +279,11 @@ def _scan_once() -> None:
                     _CACHE[eid] = rec
                 else:
                     rec["has_cr"] = _cr_path(pdf).exists()
-            pairs.append((st.st_mtime, eid))
+            dir_pairs.append((st.st_mtime, eid))
+        if dir_first:
+            _BASELINED_DIRS.add(root)
+        _DIR_STATE[root] = {"mtime": root_mtime, "pairs": dir_pairs}
+        pairs.extend(dir_pairs)
 
     pairs.sort(key=lambda x: x[0], reverse=True)
     order = [eid for _m, eid in pairs[:MAX_LIST]]
@@ -237,11 +300,10 @@ def _scan_once() -> None:
 
 
 def _scan_interval() -> int:
-    try:
-        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-        return max(4, int(cfg.get("poll_interval_seconds", 10)))
-    except (FileNotFoundError, json.JSONDecodeError, ValueError, TypeError):
-        return 10
+    # Cadence courte : un scan sans changement ne reparcourt plus les dossiers
+    # (reutilisation par mtime racine), il est donc quasi instantane. Les nouveaux
+    # examens apparaissent ainsi en quelques secondes.
+    return _SCAN_IDLE_SECONDS
 
 
 def _scanner() -> None:

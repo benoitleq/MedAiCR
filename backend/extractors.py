@@ -24,12 +24,13 @@ def _name_tokens(full_name: str) -> list[str]:
 
 
 # --- Extraction generique pilotee par des libelles (types personnalises) ---
-# Nom : suite de mots-lettres separes par un espace. On s'arrete avant un mot
-# qui est lui-meme un libelle (mot suivi de ":" ou "-"), pour ne pas happer le
-# champ voisin quand le PDF a colle les colonnes en espaces simples.
+# Nom : suite de mots-lettres separes par un espace ou une virgule (gere le
+# format "NOM, PRENOM" des ECG Schiller). On s'arrete avant un mot qui est
+# lui-meme un libelle (mot suivi de ":" ou "-"), pour ne pas happer le champ
+# voisin quand le PDF a colle les colonnes en espaces simples.
 _NAME_VALUE = (
     r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’\-]+"
-    r"(?: (?![A-Za-zÀ-ÿ'’\-]+\s*[:\-])[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’\-]+){0,3}"
+    r"(?:[ ,]+(?![A-Za-zÀ-ÿ'’\-]+\s*[:\-])[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’\-]+){0,3}"
 )
 _ID_VALUE = r"[A-Za-z0-9][A-Za-z0-9\-/]{2,}"
 _DOB_VALUE = (
@@ -112,17 +113,19 @@ def extract_pg(text: str) -> list[tuple[str, str]]:
     """Polygraphie ventilatoire (Nox T3)."""
     found: list[tuple[str, str]] = []
 
-    # Nom : "Nom <PRENOM NOM> Age <date> ..."
+    # Nom : le nom suit le libelle "Nom" et precede le champ voisin (selon le
+    # modele : "Age <date>" sur les Nox T3, ou "ID" sur d'autres exports). Le nom
+    # peut etre en minuscules ("sylvie chauvet") ou en majuscules ("JEAN DUPONT").
     m = re.search(
-        r"\bNom\s+([A-ZÀ-Ý][A-Za-zÀ-ÿ'\-]+(?:\s+[A-ZÀ-Ý][A-Za-zÀ-ÿ'\-]+)*)\s+Age\b",
+        r"\bNom\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'\- ]*?)\s+(?:ID|[ÂâAa]ge)\b",
         text,
     )
     if m:
         for tok in _name_tokens(m.group(1)):
             found.append(("Nom patient", tok))
 
-    # Date de naissance : "Age <jj/mm/aaaa>"
-    m = re.search(r"\bAge\s+(\d{1,2}/\d{1,2}/\d{4})", text)
+    # Date de naissance : "Age <jj/mm/aaaa>" ou "Âge <jj/mm/aaaa>"
+    m = re.search(r"[ÂâAa]ge\s+(\d{1,2}/\d{1,2}/\d{4})", text)
     if m:
         found.append(("Date de naissance", m.group(1)))
 
