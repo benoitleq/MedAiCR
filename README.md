@@ -1,4 +1,4 @@
-# MedAiCR — anonymisation et aide à la rédaction de comptes rendus médicaux
+# MedAiCR — anonymisation et aide à la rédaction de comptes rendus médicaux par intelligence artifcielle
 
 Application web **locale** qui **anonymise** des comptes rendus (CR) médicaux PDF,
 puis — **optionnellement** — aide à les **rédiger** via une IA, à partir du
