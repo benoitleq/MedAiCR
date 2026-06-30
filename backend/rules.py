@@ -18,6 +18,7 @@ generiques. Les regles sont appliquees dans l'ordre de la liste.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 
@@ -131,3 +132,29 @@ TYPE_LABELS: dict[str, str] = {
     "polygraphie": "Polygraphie ventilatoire",
     "holter": "Holter ECG",
 }
+
+# Couleur du lisere (bord gauche) des cartes du Workflow, par type d'examen.
+# Personnalisable dans l'onglet Configuration ; ces valeurs sont les defauts.
+TYPE_COLORS: dict[str, str] = {
+    "echo_cardiaque": "#3b82f6",  # bleu
+    "polygraphie": "#22c55e",     # vert
+    "holter": "#f59e0b",          # orange
+}
+# Palette pour les types PERSONNALISES sans couleur definie : chacun recoit une
+# teinte stable derivee de son identifiant (distinctes des le depart).
+TYPE_COLOR_PALETTE = [
+    "#8b5cf6", "#ec4899", "#14b8a6", "#f97316",
+    "#06b6d4", "#a3e635", "#eab308", "#ef4444",
+]
+DEFAULT_TYPE_COLOR = TYPE_COLOR_PALETTE[0]
+
+
+def default_color_for(type_id: str) -> str:
+    """Couleur par defaut d'un type : valeur integree si connue, sinon une teinte
+    stable tiree de la palette d'apres l'identifiant (deterministe entre lancements)."""
+    if type_id in TYPE_COLORS:
+        return TYPE_COLORS[type_id]
+    if not type_id:
+        return DEFAULT_TYPE_COLOR
+    h = int(hashlib.sha1(type_id.encode("utf-8")).hexdigest(), 16)
+    return TYPE_COLOR_PALETTE[h % len(TYPE_COLOR_PALETTE)]

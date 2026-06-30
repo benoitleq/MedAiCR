@@ -29,6 +29,20 @@ def _strip_markdown(text: str) -> str:
     text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", text)
     return text
 
+
+def _clean_keep_bold(text: str) -> str:
+    """Nettoie le markdown SAUF le gras (**...**), conserve pour le courrier Word."""
+    if not text:
+        return text
+    text = text.replace("__", "")
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", text)
+    return text
+
+
+def to_plain(text: str) -> str:
+    """Texte brut, sans aucun markdown (pour l'apercu et le fichier .txt)."""
+    return _strip_markdown(text)
+
 # Catalogue des fournisseurs : format d'API, endpoint, modeles suggeres.
 PROVIDERS = {
     "deepseek": {
@@ -207,7 +221,9 @@ def generate(text: str, cr_type: str | None = None, provider: str | None = None,
             + "\n\n--- CONSTATATIONS DU MEDECIN (a integrer imperativement au "
             "compte rendu) ---\n" + observations.strip()
         )
-    return _strip_markdown(_call(pcfg, meta, mdl, system_prompt, user, MAX_TOKENS, timeout))
+    # On CONSERVE le gras (**...**) : la version "texte brut" est derivee par
+    # to_plain() la ou il faut (.txt, apercu), le gras sert au courrier Word.
+    return _clean_keep_bold(_call(pcfg, meta, mdl, system_prompt, user, MAX_TOKENS, timeout))
 
 
 def test_connection(provider: str | None = None, api_key: str | None = None,

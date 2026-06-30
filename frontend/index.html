@@ -118,11 +118,13 @@
   .wf-refresh { padding:6px 12px; font-size:13px; }
   .wf-sub { font-size:12px; color:var(--muted); margin:8px 0 12px; }
   .wf-items { overflow:auto; display:flex; flex-direction:column; gap:8px; padding-right:4px; }
-  .wf-item { background:var(--card2); border:1px solid var(--line); border-left:3px solid transparent;
+  .wf-item { background:var(--card2); border:1px solid var(--line); border-left:6px solid transparent;
     border-radius:10px; padding:10px 12px; cursor:pointer; transition:.12s; }
   .wf-item:hover { border-color:var(--accent); }
-  .wf-item.sel { border-color:var(--accent); border-left-color:var(--accent);
-    background:rgba(56,189,248,.10); }
+  /* .sel : on surligne les bords haut/droite/bas ; le lisere gauche (couleur du
+     type, pose en style inline) reste visible meme quand l'examen est selectionne. */
+  .wf-item.sel { border-top-color:var(--accent); border-right-color:var(--accent);
+    border-bottom-color:var(--accent); background:rgba(56,189,248,.10); }
   .wf-item .nm { font-size:13px; color:var(--text); font-weight:600; word-break:break-word; }
   .wf-item .meta { font-size:11px; color:var(--muted); margin-top:5px;
     display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
@@ -133,6 +135,22 @@
   .wf-pend { color:var(--muted); border-color:var(--line); background:transparent; }
   .wf-empty { font-size:13px; color:var(--muted); padding:20px 6px; text-align:center; }
   .wf-detail .pdfview { height:430px; }
+  /* --- Pinceau : zones d'anonymisation dessinees sur le PDF --- */
+  .zone-page { position:relative; width:fit-content; max-width:100%; margin:0 auto 12px; }
+  .zone-page canvas { display:block; max-width:100%; height:auto; margin:0; box-shadow:0 1px 6px rgba(0,0,0,.35); }
+  .zone-overlay { position:absolute; inset:0; cursor:crosshair; }
+  .zone-box { position:absolute; box-sizing:border-box; border:2px solid #e23a3a;
+    background:rgba(226,58,58,.13); cursor:move; }
+  .zone-box.drawing { pointer-events:none; }
+  .zone-bar { position:absolute; top:-2px; left:-2px; transform:translateY(-100%);
+    display:flex; gap:3px; align-items:center; background:rgba(15,23,42,.94);
+    border-radius:5px; padding:2px 3px; white-space:nowrap; cursor:default; }
+  .zone-bar select { font-size:11px; padding:1px 2px; border-radius:4px; border:1px solid var(--line);
+    background:var(--card2); color:var(--text); }
+  .zone-del { width:18px; height:18px; line-height:1; padding:0; font-size:13px; font-weight:700;
+    background:#7f1d1d; color:#fff; border:none; border-radius:4px; cursor:pointer; }
+  .zone-resize { position:absolute; right:-6px; bottom:-6px; width:12px; height:12px;
+    background:#fff; border:2px solid #334155; border-radius:50%; cursor:nwse-resize; }
 </style>
 </head>
 <body>
@@ -195,6 +213,7 @@
           <div class="row">
             <button class="secondary" id="wfCrCopy">📋 Copier le CR</button>
             <button class="secondary" id="wfCrDownload">⬇ .txt</button>
+            <button id="wfCrLetter">📄 Courrier (Word, gras)</button>
           </div>
         </div>
       </div>
@@ -308,6 +327,7 @@
       <div class="row">
         <button class="secondary" id="reportCopy">📋 Copier le CR</button>
         <button class="secondary" id="reportDownload">⬇ .txt</button>
+        <button id="reportLetter">📄 Courrier (Word, gras)</button>
       </div>
     </section>
   </div>
@@ -371,6 +391,21 @@
         « MedAiCR ») ou le raccourci « Surveiller dossiers CR ». Type
         <b>Détection automatique</b> = le type de CR est deviné d'après le contenu.
       </div>
+    </section>
+
+    <section class="card">
+      <h2>🎨 Couleurs par type d'examen</h2>
+      <p class="hint">
+        Choisis la couleur du liséré (bord gauche) des cartes du Workflow pour
+        repérer chaque type d'examen d'un coup d'œil.
+      </p>
+      <div class="spacer"></div>
+      <div id="colorRows"></div>
+      <div class="spacer"></div>
+      <div class="row">
+        <button id="colorSave">💾 Enregistrer les couleurs</button>
+      </div>
+      <div class="cfg-msg" id="colorMsg"></div>
     </section>
 
     <section class="card">
@@ -470,19 +505,27 @@
         <div class="spacer"></div>
         <div id="ltDetected" class="hint"></div>
         <div id="ltLeftovers"></div>
-        <div class="hint" style="margin-top:8px">🟥 En <b style="color:#e23a3a">rouge</b> : les champs détectés qui seront anonymisés. Compare-les à l'original à gauche.</div>
+        <div class="hint" style="margin-top:8px">
+          🖌 <b>Pinceau</b> : sur l'original (à gauche), <b>dessine un rectangle</b> à la souris
+          sur chaque info à masquer. L'IA a déjà pré-positionné des zones — tu peux les
+          <b>déplacer</b>, <b>redimensionner</b> (poignée), <b>supprimer</b> (×) et choisir leur
+          <b>catégorie</b>. Clique <b>Aperçu</b> pour voir le résultat (à droite, en rouge).
+        </div>
         <div class="grid" style="margin-top:12px">
           <div>
-            <div class="cfg-head" style="margin-bottom:6px">CR fictif — original</div>
+            <div class="cfg-head" style="margin-bottom:6px">CR fictif — original (dessine ici 🖌)</div>
             <div id="ltSrcViewer" class="pdfview pdfscroll"></div>
           </div>
           <div>
-            <div class="cfg-head" style="margin-bottom:6px">Champs détectés (en rouge)</div>
+            <div class="cfg-head" style="margin-bottom:6px">Aperçu anonymisé (zones + IA, en rouge)</div>
             <div id="ltOutViewer" class="pdfview pdfscroll"></div>
           </div>
         </div>
         <div class="spacer"></div>
-        <div class="row"><button id="ltSave">💾 Enregistrer ce type</button></div>
+        <div class="row">
+          <button id="ltPreview" class="secondary">👁 Aperçu</button>
+          <button id="ltSave">💾 Enregistrer ce type</button>
+        </div>
       </div>
 
       <div class="spacer"></div>
@@ -750,6 +793,7 @@ async function runGenerate(){
     const d = await r.json();
     if (!r.ok){ $('genErr').innerHTML = esc(d.detail || 'Erreur de génération.'); return false; }
     $('reportOut').value = d.report || '';
+    reportMd = d.report_md || d.report || '';   // version avec gras pour le courrier
     $('reportRow').style.display = 'grid';
     $('reportRow').scrollIntoView({ behavior:'smooth', block:'start' });
     return true;
@@ -772,6 +816,36 @@ $('reportDownload').onclick = () => {
   a.download = 'CR_genere.txt';
   a.click();
 };
+$('reportLetter').onclick = () => downloadCourrier(reportMd || $('reportOut').value, 'Courrier_CR');
+
+// --- Courrier Word : CR avec valeurs en GRAS (markdown **...** -> RTF) ---
+let reportMd = '', wfReportMd = '';
+function crToRtf(md){
+  md = md || '';
+  const esc = s => {
+    let o = '';
+    for (const ch of s){
+      const c = ch.codePointAt(0);
+      if (ch === '\\' || ch === '{' || ch === '}') o += '\\' + ch;
+      else if (c < 128) o += ch;
+      else if (c <= 65535) o += '\\u' + (c > 32767 ? c - 65536 : c) + '?';
+      else o += '?';
+    }
+    return o;
+  };
+  // **gras** -> {\b gras} ; chaque ligne devient un paragraphe \par
+  const lineRtf = line => line.split('**').map((seg,i) => i % 2 ? '{\\b '+esc(seg)+'}' : esc(seg)).join('');
+  const body = md.split('\n').map(lineRtf).join('\\par\n');
+  return '{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Calibri;}}\\fs22\n' + body + '\n}';
+}
+function downloadCourrier(md, base){
+  if (!md || !md.trim()){ alert('Génère d\'abord le compte rendu.'); return; }
+  const blob = new Blob([crToRtf(md)], { type:'application/rtf' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (base || 'Courrier_CR') + '.rtf';
+  document.body.appendChild(a); a.click(); a.remove();
+}
 
 // ===================== Réglages IA (clé, modèle, system prompt) =====================
 let llmLoaded = false;
@@ -908,6 +982,132 @@ $('llmSave').onclick = async () => {
 
 // ===================== Ajouter un type (assisté par IA) =====================
 let ltPdf = null, ltSpec = null, ltLabel = '', ltCurProvider = '';
+let ltEditId = null;     // id du type en cours de MODIFICATION (null = création)
+let ltTypeList = [];     // types personnalisés chargés (pour l'édition)
+
+// --- Pinceau : zones d'anonymisation dessinées sur le PDF ---
+let ltZones = [];   // [{page,x,y,w,h,cat}] en coordonnées normalisées 0..1
+const ZONE_CATS = [
+  { v:'Nom patient', label:'Nom', color:'#e23a3a' },
+  { v:'N° patient', label:'N°', color:'#2563eb' },
+  { v:'Date de naissance', label:'Naissance', color:'#16a34a' },
+  { v:'Zone', label:'Autre', color:'#9333ea' },
+];
+const zoneColor = (cat) => (ZONE_CATS.find(z => z.v === cat) || {}).color || '#9333ea';
+const clamp = (v,a,b) => Math.min(Math.max(v,a), b);
+
+function setZoneBox(d, z){
+  d.style.left = (z.x*100)+'%'; d.style.top = (z.y*100)+'%';
+  d.style.width = (z.w*100)+'%'; d.style.height = (z.h*100)+'%';
+}
+function colorZoneBox(d, cat){ d.style.borderColor = zoneColor(cat); d.style.background = zoneColor(cat)+'22'; }
+
+// Rend le PDF original avec une couche de dessin par page.
+async function renderPdfEditable(el, data){
+  el.innerHTML = '<div class="loading">Chargement du document…</div>';
+  try {
+    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    el.innerHTML = '';
+    for (let n = 1; n <= pdf.numPages; n++){
+      const page = await pdf.getPage(n);
+      const vp = page.getViewport({ scale: 1.4 });
+      const wrap = document.createElement('div'); wrap.className = 'zone-page';
+      const canvas = document.createElement('canvas');
+      canvas.width = vp.width; canvas.height = vp.height;
+      wrap.appendChild(canvas);
+      const ov = document.createElement('div'); ov.className = 'zone-overlay'; ov.dataset.page = n-1;
+      wrap.appendChild(ov); el.appendChild(wrap);
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+      attachDrawing(el, ov, n-1);
+    }
+    renderZones(el);
+  } catch(e){ el.innerHTML = '<div class="loading">Impossible d\'afficher le PDF : '+e.message+'</div>'; }
+}
+
+const pageOverlay = (el, page) => el.querySelector('.zone-overlay[data-page="'+page+'"]');
+
+function renderZones(el){
+  el.querySelectorAll('.zone-overlay').forEach(o => o.innerHTML = '');
+  ltZones.forEach(z => { const ov = pageOverlay(el, z.page); if (ov) ov.appendChild(makeZoneEl(el, z)); });
+}
+
+function makeZoneEl(container, z){
+  const d = document.createElement('div'); d.className = 'zone-box';
+  setZoneBox(d, z); colorZoneBox(d, z.cat);
+  const liveRect = () => d.parentElement.getBoundingClientRect();
+  // Barre : catégorie + suppression
+  const bar = document.createElement('div'); bar.className = 'zone-bar';
+  const sel = document.createElement('select');
+  sel.innerHTML = ZONE_CATS.map(c => `<option value="${c.v}"${c.v===z.cat?' selected':''}>${c.label}</option>`).join('');
+  sel.addEventListener('mousedown', e => e.stopPropagation());
+  sel.addEventListener('change', e => { z.cat = e.target.value; colorZoneBox(d, z.cat); });
+  const del = document.createElement('button'); del.className = 'zone-del'; del.textContent = '×'; del.title = 'Supprimer la zone';
+  del.addEventListener('mousedown', e => e.stopPropagation());
+  del.addEventListener('click', e => { e.stopPropagation(); const i = ltZones.indexOf(z); if (i>=0) ltZones.splice(i,1); renderZones(container); });
+  bar.appendChild(sel); bar.appendChild(del); d.appendChild(bar);
+  // Poignée de redimensionnement (coin bas-droite)
+  const h = document.createElement('div'); h.className = 'zone-resize'; d.appendChild(h);
+  h.addEventListener('mousedown', e => {
+    e.preventDefault(); e.stopPropagation();
+    const r = liveRect(), sx = e.clientX, sy = e.clientY, ow = z.w, oh = z.h;
+    const mv = ev => { z.w = clamp(ow+(ev.clientX-sx)/r.width, 0.01, 1-z.x); z.h = clamp(oh+(ev.clientY-sy)/r.height, 0.01, 1-z.y); setZoneBox(d, z); };
+    const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); };
+    document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
+  });
+  // Déplacement (corps de la zone)
+  d.addEventListener('mousedown', e => {
+    if (e.target !== d) return;
+    e.preventDefault(); e.stopPropagation();
+    const r = liveRect(), sx = e.clientX, sy = e.clientY, ox = z.x, oy = z.y;
+    const mv = ev => { z.x = clamp(ox+(ev.clientX-sx)/r.width, 0, 1-z.w); z.y = clamp(oy+(ev.clientY-sy)/r.height, 0, 1-z.h); setZoneBox(d, z); };
+    const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); };
+    document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
+  });
+  return d;
+}
+
+// Dessin d'une NOUVELLE zone sur le fond de la page.
+function attachDrawing(container, overlay, page){
+  overlay.addEventListener('mousedown', e => {
+    if (e.target !== overlay) return;  // clic sur une zone existante -> pas un nouveau tracé
+    e.preventDefault();
+    const r = overlay.getBoundingClientRect();
+    const sxf = (e.clientX-r.left)/r.width, syf = (e.clientY-r.top)/r.height;
+    const box = document.createElement('div'); box.className = 'zone-box drawing';
+    colorZoneBox(box, 'Nom patient'); overlay.appendChild(box);
+    let z = null;
+    const mv = ev => {
+      const cxf = clamp((ev.clientX-r.left)/r.width, 0, 1), cyf = clamp((ev.clientY-r.top)/r.height, 0, 1);
+      const x = Math.min(sxf,cxf), y = Math.min(syf,cyf), w = Math.abs(cxf-sxf), h = Math.abs(cyf-syf);
+      box.style.left = x*100+'%'; box.style.top = y*100+'%'; box.style.width = w*100+'%'; box.style.height = h*100+'%';
+      z = { page, x, y, w, h, cat:'Nom patient' };
+    };
+    const up = () => {
+      document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up);
+      box.remove();
+      if (z && z.w > 0.012 && z.h > 0.012){ ltZones.push(z); renderZones(container); }
+    };
+    document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
+  });
+}
+
+$('ltPreview').onclick = async () => {
+  if (!ltPdf){ $('ltMsg').innerHTML = '<span class="exists-no">Aucun PDF.</span>'; return; }
+  $('ltMsg').textContent = '👁 Aperçu en cours…';
+  const fd = new FormData();
+  fd.append('file', ltPdf);
+  fd.append('spec', JSON.stringify({ ...(ltSpec||{}), zones: ltZones }));
+  try {
+    const r = await fetch('/api/preview-zones', { method:'POST', body: fd });
+    const d = await r.json();
+    if (!r.ok){ $('ltMsg').innerHTML = '<span class="exists-no">'+esc(d.detail||'Erreur')+'</span>'; return; }
+    if (d.pdf_base64) renderPdf($('ltOutViewer'), Uint8Array.from(atob(d.pdf_base64), c => c.charCodeAt(0)));
+    const sm = d.summary || {};
+    const parts = Object.entries(sm).map(([k,v]) => esc(k)+' ×'+v);
+    $('ltMsg').innerHTML = '<span class="exists-ok">✓ Aperçu mis à jour'+(parts.length?' — '+parts.join(', '):'')+'</span>';
+  } catch(e){ $('ltMsg').innerHTML = '<span class="exists-no">Erreur réseau : '+esc(e.message)+'</span>'; }
+};
+
 function populateLtProviders(){
   $('ltProvider').innerHTML = Object.entries(llmProviders).map(([id,p]) =>
     `<option value="${id}">${esc(p.label)}</option>`).join('');
@@ -933,6 +1133,52 @@ ltDrop.addEventListener('drop', e => { if (e.dataTransfer.files[0]) setLtFile(e.
 function setLtFile(f){
   if (!f || f.type !== 'application/pdf'){ $('ltMsg').innerHTML='<span class="exists-no">Choisis un fichier PDF.</span>'; return; }
   ltPdf = f; $('ltFilename').textContent = '✓ ' + f.name; $('ltMsg').textContent='';
+  if (ltEditId) showEditViewer();   // mode modification : afficher direct les zones existantes
+}
+
+// Affiche le PDF chargé avec les zones EXISTANTES (sans repasser par l'IA).
+function showEditViewer(){
+  if (!ltPdf) return;
+  $('ltResult').style.display = 'block';
+  ltPdf.arrayBuffer().then(buf => renderPdfEditable($('ltSrcViewer'), buf));
+  $('ltOutViewer').innerHTML = '<div class="loading">Clique « 👁 Aperçu » pour voir le résultat anonymisé.</div>';
+}
+
+// Entre en mode MODIFICATION d'un type existant : précharge libellés + zones,
+// et réutilise le PDF fictif stocké (si présent) — sinon demande de le charger.
+async function startEditType(t){
+  ltEditId = t.id; ltLabel = t.label; ltPdf = null;
+  ltSpec = {
+    name_labels: t.name_labels || [], name_before: t.name_before || [],
+    id_labels: t.id_labels || [], dob_labels: t.dob_labels || [],
+  };
+  ltZones = (t.zones || []).map(z => ({ ...z }));
+  $('ltName').value = t.label;
+  $('ltDetected').innerHTML = '✏ <b>Modification de « '+esc(t.label)+' »</b> — '
+    + ltZones.length + ' zone(s) existante(s).';
+  $('ltLeftovers').innerHTML = '';
+  $('ltResult').style.display = 'block';
+  $('ltName').scrollIntoView({ behavior:'smooth', block:'center' });
+
+  // Tente de récupérer le PDF fictif stocké pour ce type.
+  if (t.has_sample){
+    $('ltMsg').textContent = 'Chargement du PDF de référence…';
+    try {
+      const r = await fetch('/api/custom-types/'+encodeURIComponent(t.id)+'/sample');
+      if (r.ok){
+        const buf = await r.arrayBuffer();
+        ltPdf = new File([buf], (t.label||'echantillon')+'.pdf', { type:'application/pdf' });
+        $('ltFilename').textContent = '✓ PDF de référence (stocké)';
+        showEditViewer();
+        $('ltMsg').innerHTML = '<span class="exists-ok">Mode modification de « '+esc(t.label)+' ». Ajuste les zones puis Enregistrer.</span>';
+        return;
+      }
+    } catch(e){ /* repli ci-dessous */ }
+  }
+  // Pas d'échantillon : on demande un CR fictif.
+  $('ltSrcViewer').innerHTML = '<div class="loading">⬆ Charge un CR fictif de ce type (zone de dépôt ci-dessus) pour voir/ajuster les zones.</div>';
+  $('ltOutViewer').innerHTML = '';
+  $('ltMsg').innerHTML = '<span class="exists-ok">Mode modification de « '+esc(t.label)+' ». Charge un CR fictif, ajuste les zones, puis Enregistrer.</span>';
 }
 
 $('ltAnalyze').onclick = async () => {
@@ -962,8 +1208,9 @@ $('ltAnalyze').onclick = async () => {
       $('ltLeftovers').innerHTML = '<span class="exists-ok">✓ Aucune valeur fictive ne subsiste — anonymisation complète sur cet échantillon.</span>';
     }
     $('ltResult').style.display = 'block';
-    // Liseuses : original à gauche, champs détectés (rouge) à droite.
-    if (ltPdf) ltPdf.arrayBuffer().then(buf => renderPdf($('ltSrcViewer'), buf));
+    // Zones pré-positionnées par l'IA -> éditables au pinceau sur l'original.
+    ltZones = (d.zones || []).map(z => ({ ...z }));
+    if (ltPdf) ltPdf.arrayBuffer().then(buf => renderPdfEditable($('ltSrcViewer'), buf));
     if (d.pdf_base64){
       const bytes = Uint8Array.from(atob(d.pdf_base64), c => c.charCodeAt(0));
       renderPdf($('ltOutViewer'), bytes);
@@ -982,16 +1229,21 @@ $('ltAnalyze').onclick = async () => {
 
 $('ltSave').onclick = async () => {
   if (!ltSpec) return;
+  // En modification, on peut reprendre le nom saisi (permet de renommer).
+  if ($('ltName').value.trim()) ltLabel = $('ltName').value.trim();
+  const editing = !!ltEditId;
   $('ltMsg').textContent='Enregistrement…';
   try {
-    const r = await fetch('/api/custom-types', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ label: ltLabel, spec: ltSpec })
-    });
+    const fd = new FormData();
+    fd.append('label', ltLabel);
+    fd.append('spec', JSON.stringify({ ...ltSpec, zones: ltZones }));
+    if (ltEditId) fd.append('type_id', ltEditId);
+    if (ltPdf) fd.append('file', ltPdf);   // PDF fictif stocke comme echantillon
+    const r = await fetch('/api/custom-types', { method:'POST', body: fd });
     const d = await r.json();
     if (!r.ok){ $('ltMsg').innerHTML='<span class="exists-no">'+esc(d.detail||'Erreur')+'</span>'; return; }
-    $('ltMsg').innerHTML='<span class="exists-ok">✓ Type « '+esc(ltLabel)+' » enregistré.</span>';
-    ltPdf=null; ltSpec=null; $('ltFilename').textContent=''; $('ltName').value=''; $('ltResult').style.display='none';
+    $('ltMsg').innerHTML='<span class="exists-ok">✓ Type « '+esc(ltLabel)+' » '+(editing?'modifié':'enregistré')+' ('+ltZones.length+' zone(s)).</span>';
+    ltPdf=null; ltSpec=null; ltZones=[]; ltEditId=null; $('ltFilename').textContent=''; $('ltName').value=''; $('ltResult').style.display='none';
     loadCustomTypes(); refreshTypes();
   } catch(e){ $('ltMsg').innerHTML='<span class="exists-no">Erreur réseau : '+esc(e.message)+'</span>'; }
 };
@@ -1000,18 +1252,25 @@ async function loadCustomTypes(){
   try {
     const d = await (await fetch('/api/custom-types')).json();
     const list = d.types || [];
+    ltTypeList = list;
     if (!list.length){ $('ltList').innerHTML = '<span class="hint">(aucun type personnalisé pour l\'instant)</span>'; return; }
     $('ltList').innerHTML = list.map(t => {
       const nm = (t.name_labels||[]).length ? (t.name_labels||[]).join(', ')
         : ((t.name_before||[]).length ? 'avant « '+(t.name_before||[]).join(', ')+' »' : '⚠ non détecté');
+      const nz = (t.zones||[]).length;
       return `<div style="display:flex;align-items:center;gap:12px;padding:10px;border:1px solid var(--line);border-radius:10px;margin:6px 0">
         <div style="flex:1">
-          <b style="color:var(--text)">${esc(t.label)}</b>
+          <b style="color:var(--text)">${esc(t.label)}</b>${nz?' <span class="wf-badge">🖌 '+nz+' zone'+(nz>1?'s':'')+'</span>':''}
           <div style="font-size:12px;color:var(--muted);margin-top:3px">Nom : ${esc(nm)} · N° : ${esc((t.id_labels||[]).join(', ')||'—')} · Naissance : ${esc((t.dob_labels||[]).join(', ')||'—')}</div>
         </div>
+        <button class="cfg-edit secondary" data-id="${esc(t.id)}" style="width:auto;padding:7px 14px">✏ Modifier</button>
         <button class="cfg-del" data-id="${esc(t.id)}" style="width:auto;padding:7px 14px">🗑 Supprimer</button>
       </div>`;
     }).join('');
+    $('ltList').querySelectorAll('.cfg-edit').forEach(b => b.onclick = () => {
+      const t = ltTypeList.find(x => x.id === b.dataset.id);
+      if (t) startEditType(t);
+    });
     $('ltList').querySelectorAll('.cfg-del').forEach(b => b.onclick = async () => {
       if (!confirm('Supprimer ce type personnalisé ?')) return;
       await fetch('/api/custom-types/'+encodeURIComponent(b.dataset.id), { method:'DELETE' });
@@ -1078,7 +1337,7 @@ function renderWfList(exams, scanning){
           : '<span class="wf-badge wf-pend">⏳ anonymisation…</span>');
     const cr = e.has_cr ? '<span class="wf-badge wf-crb">CR ✓</span>' : '';
     const typ = e.type_label ? `<span class="wf-badge">${esc(e.type_label)}</span>` : '';
-    return `<div class="wf-item${e.id===wfSelectedId?' sel':''}" data-id="${e.id}">
+    return `<div class="wf-item${e.id===wfSelectedId?' sel':''}" data-id="${e.id}" style="border-left-color:${e.type_color||'transparent'}">
       <div class="nm">${esc(e.name)}</div>
       <div class="meta">${status}${cr}${typ}<span>${esc(e.folder)}</span><span>${fmtTime(e.mtime)}</span></div>
     </div>`;
@@ -1146,6 +1405,7 @@ $('wfGen').onclick = async () => {
     const d = await r.json();
     if (!r.ok){ $('wfGenMsg').innerHTML = '<span class="exists-no">'+esc(d.detail||'Erreur')+'</span>'; return; }
     $('wfCr').value = d.report || '';
+    wfReportMd = d.report_md || d.report || '';   // version avec gras pour le courrier
     $('wfCrRow').style.display = 'block';
     $('wfGenMsg').innerHTML = '<span class="exists-ok">✓ CR enregistré : '+esc(d.cr_filename||'')+'</span>';
     $('wfCrRow').scrollIntoView({ behavior:'smooth', block:'start' });
@@ -1166,6 +1426,7 @@ $('wfCrDownload').onclick = () => {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = 'CR_genere.txt'; a.click();
 };
+$('wfCrLetter').onclick = () => downloadCourrier(wfReportMd || $('wfCr').value, 'Courrier_CR');
 
 function startWfPoll(){
   if (wfPollTimer) return;
@@ -1175,6 +1436,7 @@ function stopWfPoll(){ if (wfPollTimer){ clearInterval(wfPollTimer); wfPollTimer
 
 // ===================== Onglets (Anonymiser / Configuration) =====================
 let crTypes = [{ id:'auto', label:'Détection automatique' }];
+let typeColors = {};   // type_id -> couleur du lisere (Workflow)
 let cfgLoaded = false;
 
 document.querySelectorAll('.navtab').forEach(t => t.addEventListener('click', () => {
@@ -1251,6 +1513,8 @@ async function loadConfig(){
   try {
     const d = await (await fetch('/api/config')).json();
     crTypes = d.cr_types || crTypes;
+    typeColors = d.type_colors || {};
+    renderColorRows();
     $('cfgInterval').value = d.poll_interval_seconds || 10;
     $('cfgRows').innerHTML = '';
     (d.watch || []).forEach(addCfgRow);
@@ -1264,6 +1528,36 @@ async function loadConfig(){
 
 $('cfgAdd').onclick = () => addCfgRow();
 $('cfgReload').onclick = loadConfig;
+
+// --- Couleurs par type d'examen (lisere du Workflow) ---
+function renderColorRows(){
+  const box = $('colorRows');
+  if (!box) return;
+  const types = crTypes.filter(t => t.id !== 'auto');
+  box.innerHTML = types.map(t => `
+    <label class="color-row" style="display:flex; align-items:center; gap:10px; margin:6px 0;">
+      <input type="color" class="cfg-color" data-id="${esc(t.id)}" value="${esc(typeColors[t.id]||'#8b5cf6')}"
+             style="width:42px; height:28px; padding:0; border:1px solid var(--line); border-radius:6px; background:none; cursor:pointer;" />
+      <span style="font-size:13px;">${esc(t.label)}</span>
+    </label>`).join('') || '<span class="hint">Aucun type d\'examen.</span>';
+}
+$('colorSave').onclick = async () => {
+  const colors = {};
+  document.querySelectorAll('#colorRows .cfg-color').forEach(i => colors[i.dataset.id] = i.value);
+  $('colorMsg').textContent = 'Enregistrement…';
+  try {
+    const r = await fetch('/api/config/colors', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ type_colors: colors })
+    });
+    const d = await r.json();
+    if (!r.ok){ $('colorMsg').innerHTML = '<span class="exists-no">'+esc(d.detail||'Erreur')+'</span>'; return; }
+    typeColors = d.type_colors || colors;
+    $('colorMsg').innerHTML = '<span class="exists-ok">✓ Couleurs enregistrées (appliquées au Workflow).</span>';
+    if (typeof loadWorkflow === 'function') loadWorkflow();  // rafraîchit les lisérés
+  } catch(e){
+    $('colorMsg').innerHTML = '<span class="exists-no">Erreur réseau : '+esc(e.message)+'</span>';
+  }
+};
 
 $('cfgSave').onclick = async () => {
   const watch = [...document.querySelectorAll('#cfgRows .cfg-row')].map(r => ({

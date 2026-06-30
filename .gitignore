@@ -47,3 +47,6 @@ Desktop.ini
 .idea/
 .vscode/
 *.swp
+
+# PDF fictifs de reference des types personnalises
+type_samples/

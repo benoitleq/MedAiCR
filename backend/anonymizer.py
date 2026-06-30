@@ -27,6 +27,11 @@ _TOKEN = {
 }
 
 
+def token_for(category: str) -> str:
+    """Jeton de remplacement d'une categorie (defaut : [MASQUE])."""
+    return _TOKEN.get(category, "[MASQUE]")
+
+
 @dataclass
 class Masked:
     category: str
@@ -34,13 +39,19 @@ class Masked:
     placeholder: str
 
 
-def anonymize(text: str, cr_type: str) -> tuple[str, list[Masked]]:
-    return _run(text, extract_identifiers(text, cr_type))
+def anonymize(text: str, cr_type: str,
+              extra_identifiers: list[tuple[str, str]] | None = None) -> tuple[str, list[Masked]]:
+    """extra_identifiers : valeurs supplementaires a masquer globalement, p.ex.
+    le texte lu sous les ZONES dessinees (extrait du PDF via zones.extract_values)."""
+    ids = extract_identifiers(text, cr_type) + list(extra_identifiers or [])
+    return _run(text, ids)
 
 
-def anonymize_with_spec(text: str, spec: dict) -> tuple[str, list[Masked]]:
+def anonymize_with_spec(text: str, spec: dict,
+                        extra_identifiers: list[tuple[str, str]] | None = None) -> tuple[str, list[Masked]]:
     """Anonymise avec une spec de type non encore enregistree (apprentissage)."""
-    return _run(text, extract_for_spec(text, spec))
+    ids = extract_for_spec(text, spec) + list(extra_identifiers or [])
+    return _run(text, ids)
 
 
 def _run(text: str, identifiers: list[tuple[str, str]]) -> tuple[str, list[Masked]]:

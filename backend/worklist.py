@@ -32,7 +32,8 @@ from pdf_extract import extract_text, looks_like_scan
 from pdf_redact import redact_pdf
 import custom_types
 import llm
-from rules import TYPE_LABELS
+import zones
+from rules import TYPE_COLORS, TYPE_LABELS, default_color_for
 
 PREFIX = "ANOM_"
 MAX_LIST = 400        # nb max d'examens renvoyes (les plus recents)
@@ -132,12 +133,26 @@ def _resolve_type(raw: str, cr_type: str) -> str | None:
     return cr_type if cr_type in _all_labels() else None
 
 
+def _arrival_time(st) -> float:
+    """Heure d'ARRIVEE de l'examen dans le dossier surveille = date de CREATION
+    locale du fichier. On n'utilise PAS st_mtime : certains appareils (echographe
+    Philips...) ecrivent le PDF avec l'horloge de la machine source, souvent
+    decalee, et cette date de modification est conservee lors de la copie sur le
+    partage -> elle fausserait l'ordre chronologique. La date de creation reflete
+    le moment ou le fichier est apparu sur le poste/serveur (= ce que montre
+    l'Explorateur pour le dossier d'examen)."""
+    bt = getattr(st, "st_birthtime", None)  # Python 3.12+ sur Windows : vraie date de creation
+    if bt:
+        return bt
+    return st.st_ctime  # Windows : date de creation ; repli si st_birthtime absent
+
+
 def _new_record(path: Path, cr_type_cfg: str, root: str, st) -> dict:
     """Enregistrement LEGER (sans lecture du PDF). type_label connu si type explicite."""
     label = "" if cr_type_cfg == "auto" else _all_labels().get(cr_type_cfg, cr_type_cfg)
     return {
         "id": _exam_id(path), "path": str(path), "name": path.name,
-        "folder": _rel_folder(path, root), "mtime": st.st_mtime, "size": st.st_size,
+        "folder": _rel_folder(path, root), "mtime": _arrival_time(st), "size": st.st_size,
         "cr_type_cfg": cr_type_cfg, "cr_type": None, "type_label": label,
         "anonymized": False, "pending": True, "error": "",
         "anon_text": "", "summary": {}, "masked": [],
@@ -152,7 +167,8 @@ def _anonymize_record(rec: dict) -> None:
     cr = anon = None
     masked: list = []
     try:
-        raw = extract_text(path.read_bytes())
+        data = path.read_bytes()
+        raw = extract_text(data)
         if looks_like_scan(raw):
             error = "PDF scanné (pas de couche texte)"
         else:
@@ -160,7 +176,9 @@ def _anonymize_record(rec: dict) -> None:
             if cr is None:
                 error = "Type indéterminé (détection auto)"
             else:
-                anon, masked = anonymize(raw, cr)
+                # Valeurs lues sous les zones dessinees du type (masquage global).
+                extra = zones.values_for_type(data, cr)
+                anon, masked = anonymize(raw, cr, extra_identifiers=extra)
     except Exception as exc:  # noqa: BLE001
         error = f"Lecture impossible ({exc})"
 
@@ -272,14 +290,15 @@ def _scan_once() -> None:
                 st = pdf.stat()
             except OSError:
                 continue
+            arrival = _arrival_time(st)
             with _LOCK:
                 rec = _CACHE.get(eid)
-                if rec is None or rec["mtime"] != st.st_mtime or rec["size"] != st.st_size:
+                if rec is None or rec["mtime"] != arrival or rec["size"] != st.st_size:
                     rec = _new_record(pdf, cr_type, root, st)
                     _CACHE[eid] = rec
                 else:
                     rec["has_cr"] = _cr_path(pdf).exists()
-            dir_pairs.append((st.st_mtime, eid))
+            dir_pairs.append((arrival, eid))
         if dir_first:
             _BASELINED_DIRS.add(root)
         _DIR_STATE[root] = {"mtime": root_mtime, "pairs": dir_pairs}
@@ -327,9 +346,22 @@ def scanning() -> bool:
     return not _SCAN_DONE
 
 
+def _type_colors() -> dict:
+    """Couleurs (lisere) par type : valeurs de config.json + defauts integres."""
+    try:
+        saved = json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("type_colors")
+    except (FileNotFoundError, json.JSONDecodeError):
+        saved = None
+    colors = dict(TYPE_COLORS)
+    if isinstance(saved, dict):
+        colors.update({k: str(v) for k, v in saved.items()})
+    return colors
+
+
 def list_exams() -> list[dict]:
     """Renvoie INSTANTANEMENT le dernier instantane (le scan tourne en fond)."""
     _ensure_scanner()
+    colors = _type_colors()
     with _ORDER_LOCK:
         ids = list(_ORDER)
     out: list[dict] = []
@@ -338,10 +370,14 @@ def list_exams() -> list[dict]:
             r = _CACHE.get(eid)
             if not r:
                 continue
+            # Type effectif pour la couleur : resolu si dispo, sinon configure.
+            tid = r["cr_type"] or (r["cr_type_cfg"] if r["cr_type_cfg"] != "auto" else None)
+            color = colors.get(tid) or (default_color_for(tid) if tid else "#64748b")
             out.append({
                 "id": r["id"], "name": r["name"], "folder": r["folder"], "mtime": r["mtime"],
                 "anonymized": r["anonymized"], "pending": r["pending"], "error": r["error"],
                 "type_label": r["type_label"], "summary": r["summary"], "has_cr": r["has_cr"],
+                "type_color": color,
             })
     return out
 
@@ -410,7 +446,8 @@ def generate_cr(eid: str, observations: str | None) -> dict:
     if not rec["anonymized"]:
         raise ValueError(rec["error"] or "Examen non anonymisable.")
 
-    report = llm.generate(rec["anon_text"], rec["cr_type"], observations=observations)
+    report_md = llm.generate(rec["anon_text"], rec["cr_type"], observations=observations)
+    report = llm.to_plain(report_md)  # .txt et apercu : sans gras markdown
 
     cr_file = _cr_path(Path(rec["path"]))
     try:
@@ -422,7 +459,8 @@ def generate_cr(eid: str, observations: str | None) -> dict:
                 _CACHE[rec["id"]]["has_cr"] = True
     except OSError:
         pass
-    return {"report": report, "cr_filename": cr_file.name}
+    # report_md conserve le gras (**...**) -> sert au courrier Word cote frontend.
+    return {"report": report, "report_md": report_md, "cr_filename": cr_file.name}
 
 
 # Demarre le scan de fond des l'import (prechauffage) : la liste est prete avant

@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import datetime
 import json
+import re
 import threading
 from pathlib import Path
 
@@ -21,13 +22,19 @@ from fastapi.staticfiles import StaticFiles
 import custom_types
 import llm
 import worklist as workflow  # nom de fichier "worklist" : evite le hook PyInstaller du paquet PyPI "workflow"
-from anonymizer import anonymize, anonymize_with_spec, summarize
+import zones
+from anonymizer import (
+    anonymize,
+    anonymize_with_spec,
+    identifier_spans_for_spec,
+    summarize,
+)
 from appconfig import CONFIG_FILE, CUSTOM_TYPES_FILE, FRONTEND_DIR, ICON_FILE, LLM_FILE
 from pdf_extract import extract_text, looks_like_scan
 from pdf_redact import redact_pdf, redact_pdf_spec
-from rules import TYPE_LABELS
+from rules import DEFAULT_TYPE_COLOR, TYPE_LABELS, default_color_for
 
-app = FastAPI(title="MedAiCR", version="1.1.0")
+app = FastAPI(title="MedAiCR", version="1.2.0")
 
 
 def all_type_labels() -> dict:
@@ -37,6 +44,24 @@ def all_type_labels() -> dict:
 
 def is_valid_type(cr_type: str, allow_auto: bool = False) -> bool:
     return cr_type in all_type_labels() or (allow_auto and cr_type == "auto")
+
+
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def resolved_type_colors() -> dict:
+    """Couleur (lisere Workflow) pour CHAQUE type connu : valeur enregistree dans
+    config.json, sinon defaut integre, sinon couleur de repli."""
+    saved = _read_config().get("type_colors", {})
+    if not isinstance(saved, dict):
+        saved = {}
+    out = {}
+    for tid in all_type_labels():
+        col = saved.get(tid)
+        if not (col and _HEX_COLOR.match(str(col))):
+            col = default_color_for(tid)
+        out[tid] = col
+    return out
 
 
 @app.get("/")
@@ -100,6 +125,7 @@ def get_config() -> dict:
         "watch": watch,
         "cr_types": [{"id": "auto", "label": "Détection automatique"}]
         + [{"id": k, "label": v} for k, v in all_type_labels().items()],
+        "type_colors": resolved_type_colors(),
     }
 
 
@@ -137,11 +163,32 @@ def save_config(payload: dict = Body(...)) -> dict:
              "enabled": enabled, "recursive": recursive}
         )
 
-    out = {"_aide": _AIDE, "poll_interval_seconds": interval, "watch": clean_watch}
+    out = _read_config()  # on repart de l'existant pour PRESERVER type_colors
+    out.update({"_aide": _AIDE, "poll_interval_seconds": interval, "watch": clean_watch})
     CONFIG_FILE.write_text(
         json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return {"ok": True, "warnings": warnings, "saved": len(clean_watch)}
+
+
+@app.post("/api/config/colors")
+def save_type_colors(payload: dict = Body(...)) -> dict:
+    """Enregistre la couleur (lisere Workflow) par type d'examen, sans toucher au
+    reste de la config (dossiers surveilles, intervalle)."""
+    colors = payload.get("type_colors")
+    if not isinstance(colors, dict):
+        raise HTTPException(400, "'type_colors' doit etre un objet {type: couleur}.")
+    cfg = _read_config()
+    saved = cfg.get("type_colors")
+    if not isinstance(saved, dict):
+        saved = {}
+    valid = all_type_labels()
+    for tid, col in colors.items():
+        if tid in valid and _HEX_COLOR.match(str(col)):
+            saved[tid] = str(col)
+    cfg["type_colors"] = saved
+    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"ok": True, "type_colors": resolved_type_colors()}
 
 
 @app.post("/api/pick-folder")
@@ -217,6 +264,14 @@ def export_config() -> Response:
         "exported_at": datetime.datetime.now().isoformat(timespec="seconds"),
         **{key: _read_json_file(path) for key, path in _BACKUP_FILES.items()},
     }
+    # PDF fictifs de reference par type (pour re-editer les zones apres restauration)
+    samples = {}
+    for tid in custom_types.load():
+        data = custom_types.read_sample(tid)
+        if data:
+            samples[tid] = base64.b64encode(data).decode("ascii")
+    if samples:
+        bundle["samples"] = samples
     data = json.dumps(bundle, ensure_ascii=False, indent=2)
     fname = "MedAiCR_config_" + datetime.datetime.now().strftime("%Y%m%d_%H%M") + ".json"
     return Response(
@@ -243,6 +298,18 @@ def import_config(payload: dict = Body(...)) -> dict:
                 json.dumps(section, ensure_ascii=False, indent=2), encoding="utf-8"
             )
             restored.append(key)
+    # PDF fictifs de reference par type
+    samples = payload.get("samples")
+    if isinstance(samples, dict):
+        n = 0
+        for tid, b64 in samples.items():
+            try:
+                custom_types.save_sample(tid, base64.b64decode(b64))
+                n += 1
+            except Exception:  # noqa: BLE001
+                pass
+        if n:
+            restored.append(f"samples({n})")
     if not restored:
         raise HTTPException(400, "Aucune section de configuration valide dans le fichier.")
     return {"ok": True, "restored": restored}
@@ -349,6 +416,14 @@ async def learn_type(
     except Exception:
         pdf_b64 = ""
 
+    # Zones INITIALES (rectangles des champs detectes par l'IA) : pre-remplissent
+    # le pinceau pour que l'utilisateur ajuste visuellement.
+    try:
+        init_zones = zones.zones_from_spans(
+            pdf_bytes, identifier_spans_for_spec(raw, rules))
+    except Exception:  # noqa: BLE001
+        init_zones = []
+
     return {
         "label": type_name.strip(),
         "spec": rules,
@@ -358,22 +433,78 @@ async def learn_type(
         "summary": summarize(masked),
         "leftovers": leftovers,
         "pdf_base64": pdf_b64,
+        "zones": init_zones,
     }
+
+
+@app.post("/api/preview-zones")
+async def preview_zones(file: UploadFile = ..., spec: str = Form("{}")) -> dict:
+    """Apercu LIVE pendant que l'utilisateur peint : applique libelles IA ET zones
+    dessinees, renvoie le PDF surligne (rouge) + le recap des elements masques."""
+    if file is None or not file.filename:
+        raise HTTPException(400, "Aucun fichier PDF fourni.")
+    pdf_bytes = await file.read()
+    try:
+        s = json.loads(spec) if spec else {}
+    except json.JSONDecodeError:
+        s = {}
+    if not isinstance(s, dict):
+        s = {}
+    try:
+        raw = extract_text(pdf_bytes)
+    except Exception as exc:
+        raise HTTPException(400, f"Lecture du PDF impossible : {exc}") from exc
+
+    zvals = zones.extract_values(pdf_bytes, s.get("zones"))
+    anon, masked = anonymize_with_spec(raw, s, extra_identifiers=zvals)
+    try:
+        red_pdf, _ = redact_pdf_spec(pdf_bytes, s, highlight=True)
+        pdf_b64 = base64.b64encode(red_pdf).decode("ascii")
+    except Exception:  # noqa: BLE001 — l'apercu PDF est optionnel
+        pdf_b64 = ""
+    return {"preview": anon, "summary": summarize(masked), "pdf_base64": pdf_b64}
 
 
 @app.get("/api/custom-types")
 def list_custom_types() -> dict:
-    return {"types": [{"id": k, **v} for k, v in custom_types.load().items()]}
+    return {"types": [
+        {"id": k, "has_sample": custom_types.has_sample(k), **v}
+        for k, v in custom_types.load().items()
+    ]}
 
 
 @app.post("/api/custom-types")
-def save_custom_type(payload: dict = Body(...)) -> dict:
-    label = (payload.get("label") or "").strip()
-    spec = payload.get("spec") or {}
+async def save_custom_type(
+    label: str = Form(...),
+    spec: str = Form("{}"),
+    type_id: str | None = Form(None),
+    file: UploadFile | None = None,
+) -> dict:
+    """Cree/met a jour un type. Si un PDF (fictif) est fourni, il est STOCKE comme
+    echantillon de reference -> re-edition des zones sans re-upload."""
+    label = (label or "").strip()
     if not label:
         raise HTTPException(400, "Nom du type manquant.")
-    type_id = custom_types.upsert(label, spec, payload.get("type_id"))
-    return {"ok": True, "type_id": type_id}
+    try:
+        s = json.loads(spec) if spec else {}
+    except json.JSONDecodeError:
+        s = {}
+    tid = custom_types.upsert(label, s if isinstance(s, dict) else {}, type_id or None)
+    if file is not None and file.filename:
+        try:
+            custom_types.save_sample(tid, await file.read())
+        except Exception:  # noqa: BLE001 — l'echantillon est optionnel
+            pass
+    return {"ok": True, "type_id": tid, "has_sample": custom_types.has_sample(tid)}
+
+
+@app.get("/api/custom-types/{type_id}/sample")
+def get_custom_type_sample(type_id: str) -> Response:
+    """Renvoie le PDF fictif stocke pour ce type (pour re-editer les zones)."""
+    data = custom_types.read_sample(type_id)
+    if data is None:
+        raise HTTPException(404, "Aucun PDF echantillon pour ce type.")
+    return Response(content=data, media_type="application/pdf")
 
 
 @app.delete("/api/custom-types/{type_id}")
@@ -389,7 +520,7 @@ def generate_endpoint(payload: dict = Body(...)) -> dict:
     if not text:
         raise HTTPException(400, "Aucun texte a traiter (anonymisez d'abord un CR).")
     try:
-        report = llm.generate(
+        report_md = llm.generate(
             text, payload.get("cr_type"), payload.get("provider"),
             payload.get("model"), payload.get("observations"),
         )
@@ -397,7 +528,8 @@ def generate_endpoint(payload: dict = Body(...)) -> dict:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:  # erreur reseau / API
         raise HTTPException(502, str(exc)) from exc
-    return {"report": report}
+    # report = brut (apercu) ; report_md = avec gras (**...**) pour le courrier Word.
+    return {"report": llm.to_plain(report_md), "report_md": report_md}
 
 
 # --------------------------------------------------------------------------
@@ -449,6 +581,7 @@ async def anonymize_endpoint(
         raise HTTPException(400, f"Type de CR inconnu : {cr_type}")
 
     # 1. Recuperer le texte source (PDF prioritaire, sinon texte colle)
+    extra: list = []
     if file is not None and file.filename:
         pdf_bytes = await file.read()
         try:
@@ -461,13 +594,14 @@ async def anonymize_endpoint(
                 "Ce PDF semble etre un scan (pas de couche texte). "
                 "OCR non disponible pour l'instant.",
             )
+        extra = zones.values_for_type(pdf_bytes, cr_type)  # valeurs sous les zones
     elif text:
         raw = text
     else:
         raise HTTPException(400, "Fournir un fichier PDF ou un texte a anonymiser.")
 
     # 2. Anonymiser
-    anonymized, masked = anonymize(raw, cr_type)
+    anonymized, masked = anonymize(raw, cr_type, extra_identifiers=extra)
 
     return JSONResponse(_payload(cr_type, anonymized, masked))
 
@@ -499,7 +633,8 @@ async def anonymize_pdf_endpoint(
         )
 
     # Texte anonymise (pour l'apercu + recap) et PDF redige (pour le telechargement).
-    anonymized, masked = anonymize(raw, cr_type)
+    extra = zones.values_for_type(pdf_bytes, cr_type)  # valeurs sous les zones
+    anonymized, masked = anonymize(raw, cr_type, extra_identifiers=extra)
     try:
         pdf_out, _ = redact_pdf(pdf_bytes, cr_type)
     except Exception as exc:

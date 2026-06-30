@@ -1,5 +1,5 @@
 @echo off
-REM Lanceur de l'Anonymiseur de CR : demarre le serveur local et ouvre le navigateur.
+REM Lanceur de MedAiCR : demarre le serveur local, la surveillance et le navigateur.
 cd /d "%~dp0"
 
 REM Cree l'environnement Python au premier lancement.
@@ -18,7 +18,7 @@ start "" /min cmd /c "timeout /t 3 >nul & start """" http://127.0.0.1:8000/"
 
 REM Demarre le serveur (laisser cette fenetre ouverte pendant l'utilisation).
 echo.
-echo === Anonymiseur de CR ===
+echo === MedAiCR ===
 echo - Interface web : http://127.0.0.1:8000/ (le navigateur va s'ouvrir)
 echo - Surveillance des dossiers : active (fenetre "Surveillance CR" reduite)
 echo.

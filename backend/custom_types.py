@@ -21,6 +21,38 @@ import unicodedata
 
 from appconfig import CUSTOM_TYPES_FILE
 
+# PDF FICTIF de reference stocke par type : permet de re-editer les zones sans
+# re-uploader. Un fichier par type, a cote de custom_types.json.
+SAMPLES_DIR = CUSTOM_TYPES_FILE.parent / "type_samples"
+
+
+def sample_path(type_id: str):
+    return SAMPLES_DIR / f"{type_id}.pdf"
+
+
+def has_sample(type_id: str) -> bool:
+    return sample_path(type_id).exists()
+
+
+def save_sample(type_id: str, pdf_bytes: bytes) -> None:
+    SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
+    sample_path(type_id).write_bytes(pdf_bytes)
+
+
+def read_sample(type_id: str) -> bytes | None:
+    p = sample_path(type_id)
+    try:
+        return p.read_bytes()
+    except (FileNotFoundError, OSError):
+        return None
+
+
+def _delete_sample(type_id: str) -> None:
+    try:
+        sample_path(type_id).unlink()
+    except (FileNotFoundError, OSError):
+        pass
+
 
 def load() -> dict:
     try:
@@ -56,6 +88,8 @@ def upsert(label: str, spec: dict, type_id: str | None = None) -> str:
         "name_before": list(spec.get("name_before", [])),
         "id_labels": list(spec.get("id_labels", [])),
         "dob_labels": list(spec.get("dob_labels", [])),
+        # Zones d'anonymisation dessinees sur le PDF (selection visuelle).
+        "zones": list(spec.get("zones", [])),
     }
     _save(data)
     return type_id
@@ -65,6 +99,7 @@ def delete(type_id: str) -> None:
     data = load()
     if data.pop(type_id, None) is not None:
         _save(data)
+    _delete_sample(type_id)
 
 
 def labels() -> dict:
