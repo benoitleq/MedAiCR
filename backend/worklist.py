@@ -447,7 +447,8 @@ def generate_cr(eid: str, observations: str | None) -> dict:
         raise ValueError(rec["error"] or "Examen non anonymisable.")
 
     report_md, reco_md = llm.generate_full(
-        rec["anon_text"], rec["cr_type"], observations=observations, with_reco=True)
+        rec["anon_text"], rec["cr_type"], observations=observations,
+        with_reco=llm.reco_enabled(rec["cr_type"]))
     report = llm.to_plain(report_md)  # .txt et apercu : sans gras markdown
 
     cr_file = _cr_path(Path(rec["path"]))

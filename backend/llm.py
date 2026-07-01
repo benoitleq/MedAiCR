@@ -93,11 +93,22 @@ def read_config() -> dict:
     if isinstance(data.get("system_prompts"), dict):
         prompts.update({k: str(v) for k, v in data["system_prompts"].items()})
 
+    # Recommandations IA activees par TYPE d'examen (opt-in, off par defaut).
+    reco = {}
+    if isinstance(data.get("reco_enabled"), dict):
+        reco = {str(k): bool(v) for k, v in data["reco_enabled"].items()}
+
     provider = data.get("provider", "deepseek")
     if provider not in PROVIDERS:
         provider = "deepseek"
 
-    return {"provider": provider, "providers": providers, "system_prompts": prompts}
+    return {"provider": provider, "providers": providers,
+            "system_prompts": prompts, "reco_enabled": reco}
+
+
+def reco_enabled(cr_type: str | None) -> bool:
+    """Les recommandations IA sont-elles activees pour ce type d'examen ?"""
+    return bool(read_config().get("reco_enabled", {}).get(cr_type or "", False))
 
 
 def write_config(updates: dict) -> dict:
@@ -125,6 +136,11 @@ def write_config(updates: dict) -> dict:
         prompts = dict(cfg["system_prompts"])
         prompts.update({str(k): str(v) for k, v in updates["system_prompts"].items()})
         cfg["system_prompts"] = prompts
+
+    if isinstance(updates.get("reco_enabled"), dict):
+        reco = dict(cfg.get("reco_enabled", {}))
+        reco.update({str(k): bool(v) for k, v in updates["reco_enabled"].items()})
+        cfg["reco_enabled"] = reco
 
     LLM_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     return cfg
@@ -209,14 +225,16 @@ RECO_MARKER = "===RECOMMANDATIONS==="
 _RECO_INSTRUCTION = (
     "\n\nEnsuite, APRES le compte rendu, insere une ligne contenant EXACTEMENT :\n"
     + RECO_MARKER + "\n"
-    "puis une section « Recommandations de prise en charge » fondee sur les "
-    "DERNIERES recommandations europeennes applicables au vu des resultats : "
-    "valvulopathies (ESC/EACTS 2021), cardiomyopathies dont CMH (ESC 2023), "
-    "insuffisance cardiaque (ESC 2021/2023), et tout element pertinent en "
-    "echocardiographie. Sois concis et actionnable : seuils/grades utiles, "
-    "surveillance recommandee, indications chirurgicales/interventionnelles "
-    "eventuelles. Mets les elements importants en gras (**...**). Si aucune "
-    "recommandation specifique ne s'applique, indique-le brievement."
+    "puis une section « Recommandations de prise en charge » ADAPTEE AU TYPE "
+    "D'EXAMEN et aux resultats ci-dessus, fondee sur les DERNIERES recommandations "
+    "applicables (societes savantes / ESC quand pertinent). N'applique QUE des "
+    "recommandations reellement pertinentes pour cet examen : par exemple, pour une "
+    "echocardiographie -> valvulopathies (ESC/EACTS 2021), cardiomyopathies/CMH "
+    "(ESC 2023), insuffisance cardiaque ; pour un ECG -> troubles du rythme/"
+    "conduction correspondants ; etc. N'INVENTE PAS de recommandations hors sujet. "
+    "Sois concis et actionnable (seuils/grades, surveillance, indications). Mets les "
+    "elements importants en gras (**...**). Si aucune recommandation specifique ne "
+    "s'applique, ecris simplement qu'un suivi standard suffit."
 )
 
 

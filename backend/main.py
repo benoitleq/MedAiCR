@@ -337,6 +337,7 @@ def get_llm_config() -> dict:
         "provider": cfg["provider"],
         "providers": providers,
         "system_prompts": cfg["system_prompts"],
+        "reco_enabled": cfg["reco_enabled"],
         "types": [{"id": k, "label": v} for k, v in all_type_labels().items()],
     }
 
@@ -522,7 +523,8 @@ def generate_endpoint(payload: dict = Body(...)) -> dict:
     try:
         report_md, reco_md = llm.generate_full(
             text, payload.get("cr_type"), payload.get("provider"),
-            payload.get("model"), payload.get("observations"), with_reco=True,
+            payload.get("model"), payload.get("observations"),
+            with_reco=llm.reco_enabled(payload.get("cr_type")),
         )
     except ValueError as exc:  # config manquante
         raise HTTPException(400, str(exc)) from exc

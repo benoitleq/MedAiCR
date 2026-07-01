@@ -466,6 +466,12 @@
       <textarea id="llmPrompt" style="min-height:220px" placeholder="Colle ici les instructions de ton GEM/GPT pour CE type d'examen : rôle, format du CR, recommandations à suivre…"></textarea>
 
       <div class="spacer"></div>
+      <label class="cfg-enabled" style="font-size:14px">
+        <input type="checkbox" id="llmRecoChk" /> 🩺 Générer aussi des <b>recommandations de prise en charge (IA)</b> pour ce type d'examen
+      </label>
+      <div class="hint">Adaptées au type d'examen (ex. valvulopathies/CMH en échographie, rythme/conduction en ECG). À vérifier — non contractuel. Désactivé par défaut.</div>
+
+      <div class="spacer"></div>
       <div class="row">
         <button id="llmSave">💾 Enregistrer</button>
         <button class="secondary" id="llmReload">↻ Recharger</button>
@@ -911,6 +917,7 @@ async function copyRich(md, btn, richId){
 // ===================== Réglages IA (clé, modèle, system prompt) =====================
 let llmLoaded = false;
 let llmPrompts = {};       // system prompt par type d'examen
+let llmReco = {};          // recommandations IA activées par type d'examen
 let llmCurType = '';       // type d'examen actuellement édité
 let llmProviders = {};     // état des fournisseurs (modèle éditable inclus)
 let llmCurProvider = '';   // fournisseur affiché
@@ -939,10 +946,12 @@ async function loadLlmConfig(){
     showProvider(llmCurProvider);
 
     llmPrompts = d.system_prompts || {};
+    llmReco = d.reco_enabled || {};
     $('llmType').innerHTML = (d.types || []).map(t =>
       `<option value="${t.id}">${esc(t.label)}</option>`).join('');
     llmCurType = $('llmType').value;
     $('llmPrompt').value = llmPrompts[llmCurType] || '';
+    $('llmRecoChk').checked = !!llmReco[llmCurType];
     populateLtProviders();
     llmLoaded = true;
     $('llmMsg').textContent = '';
@@ -964,9 +973,10 @@ $('llmProvider').onchange = () => {
 };
 // Changer de type d'examen : mémorise le prompt en cours puis affiche l'autre.
 $('llmType').onchange = () => {
-  if (llmCurType) llmPrompts[llmCurType] = $('llmPrompt').value;
+  if (llmCurType){ llmPrompts[llmCurType] = $('llmPrompt').value; llmReco[llmCurType] = $('llmRecoChk').checked; }
   llmCurType = $('llmType').value;
   $('llmPrompt').value = llmPrompts[llmCurType] || '';
+  $('llmRecoChk').checked = !!llmReco[llmCurType];
 };
 $('llmReload').onclick = loadLlmConfig;
 // Teste la connexion au fournisseur affiché (clé saisie non encore enregistrée incluse).
@@ -1018,14 +1028,14 @@ async function refreshActiveAi(){
 }
 $('llmSave').onclick = async () => {
   stashCurrentProvider();
-  if (llmCurType) llmPrompts[llmCurType] = $('llmPrompt').value;
+  if (llmCurType){ llmPrompts[llmCurType] = $('llmPrompt').value; llmReco[llmCurType] = $('llmRecoChk').checked; }
   // Construit la mise à jour : modèle de chaque fournisseur + clés saisies.
   const providers = {};
   for (const pid of Object.keys(llmProviders)){
     providers[pid] = { model: llmProviders[pid].model };
     if (llmTypedKeys[pid]) providers[pid].api_key = llmTypedKeys[pid];
   }
-  const payload = { provider: llmCurProvider, providers, system_prompts: llmPrompts };
+  const payload = { provider: llmCurProvider, providers, system_prompts: llmPrompts, reco_enabled: llmReco };
   $('llmMsg').textContent = 'Enregistrement…';
   try {
     const r = await fetch('/api/llm-config', {
