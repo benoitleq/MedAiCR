@@ -23,6 +23,7 @@ import json
 import os
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 from anonymizer import anonymize, summarize
@@ -410,6 +411,35 @@ def _ensure_anonymized(rec: dict) -> dict:
     return rec
 
 
+# Cache borne (LRU) de l'APERCU anonymise (PDF redige). Rediger un PDF multi-pages
+# (Holter, echo) est couteux ; on ne le refait pas a chaque ouverture. Borne en
+# memoire (quelques examens recents), invalide si le fichier source change.
+_ANON_PDF_CACHE: "OrderedDict[str, tuple]" = OrderedDict()  # eid -> (sig, bytes)
+_ANON_PDF_MAX = 8
+_ANON_PDF_LOCK = threading.Lock()
+
+
+def _anon_pdf(eid: str, path: Path, cr_type: str, data: bytes) -> bytes:
+    """PDF anonymise de l'examen, avec cache (redaction faite UNE fois)."""
+    try:
+        st = path.stat()
+        sig = (st.st_mtime, st.st_size)
+    except OSError:
+        sig = None
+    with _ANON_PDF_LOCK:
+        hit = _ANON_PDF_CACHE.get(eid)
+        if hit and sig is not None and hit[0] == sig:
+            _ANON_PDF_CACHE.move_to_end(eid)
+            return hit[1]
+    pdf, _ = redact_pdf(data, cr_type)   # redaction (lourde) HORS verrou
+    with _ANON_PDF_LOCK:
+        _ANON_PDF_CACHE[eid] = (sig, pdf)
+        _ANON_PDF_CACHE.move_to_end(eid)
+        while len(_ANON_PDF_CACHE) > _ANON_PDF_MAX:
+            _ANON_PDF_CACHE.popitem(last=False)
+    return pdf
+
+
 def get_exam(eid: str) -> dict:
     """Detail complet d'un examen : texte anonymise + PDF source/anonymise (b64)."""
     rec = _find(eid)
@@ -438,7 +468,7 @@ def get_exam(eid: str) -> dict:
         data = path.read_bytes()
         out["source_pdf_base64"] = base64.b64encode(data).decode("ascii")
         if rec["anonymized"] and rec["cr_type"]:
-            anon_pdf, _ = redact_pdf(data, rec["cr_type"])
+            anon_pdf = _anon_pdf(rec["id"], path, rec["cr_type"], data)
             out["anon_pdf_base64"] = base64.b64encode(anon_pdf).decode("ascii")
     except Exception:  # noqa: BLE001 — l'apercu PDF est optionnel
         pass
