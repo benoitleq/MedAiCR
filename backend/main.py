@@ -520,16 +520,17 @@ def generate_endpoint(payload: dict = Body(...)) -> dict:
     if not text:
         raise HTTPException(400, "Aucun texte a traiter (anonymisez d'abord un CR).")
     try:
-        report_md = llm.generate(
+        report_md, reco_md = llm.generate_full(
             text, payload.get("cr_type"), payload.get("provider"),
-            payload.get("model"), payload.get("observations"),
+            payload.get("model"), payload.get("observations"), with_reco=True,
         )
     except ValueError as exc:  # config manquante
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:  # erreur reseau / API
         raise HTTPException(502, str(exc)) from exc
-    # report = brut (apercu) ; report_md = avec gras (**...**) pour le courrier Word.
-    return {"report": llm.to_plain(report_md), "report_md": report_md}
+    # report = brut (apercu) ; report_md/reco_md = avec gras (**...**) pour la liseuse.
+    return {"report": llm.to_plain(report_md), "report_md": report_md,
+            "reco": llm.to_plain(reco_md), "reco_md": reco_md}
 
 
 # --------------------------------------------------------------------------

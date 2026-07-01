@@ -446,7 +446,8 @@ def generate_cr(eid: str, observations: str | None) -> dict:
     if not rec["anonymized"]:
         raise ValueError(rec["error"] or "Examen non anonymisable.")
 
-    report_md = llm.generate(rec["anon_text"], rec["cr_type"], observations=observations)
+    report_md, reco_md = llm.generate_full(
+        rec["anon_text"], rec["cr_type"], observations=observations, with_reco=True)
     report = llm.to_plain(report_md)  # .txt et apercu : sans gras markdown
 
     cr_file = _cr_path(Path(rec["path"]))
@@ -460,7 +461,9 @@ def generate_cr(eid: str, observations: str | None) -> dict:
     except OSError:
         pass
     # report_md conserve le gras (**...**) -> sert au courrier Word cote frontend.
-    return {"report": report, "report_md": report_md, "cr_filename": cr_file.name}
+    return {"report": report, "report_md": report_md,
+            "reco": llm.to_plain(reco_md), "reco_md": reco_md,
+            "cr_filename": cr_file.name}
 
 
 # Demarre le scan de fond des l'import (prechauffage) : la liste est prete avant

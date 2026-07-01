@@ -205,13 +205,29 @@ def _resolve(provider: str | None, api_key: str | None, model: str | None):
     return cfg, pid, meta, pcfg, (model or pcfg["model"])
 
 
-def generate(text: str, cr_type: str | None = None, provider: str | None = None,
-             model: str | None = None, observations: str | None = None,
-             timeout: int = 180) -> str:
-    """Genere un CR avec le fournisseur choisi + le system prompt du TYPE d'examen.
+RECO_MARKER = "===RECOMMANDATIONS==="
+_RECO_INSTRUCTION = (
+    "\n\nEnsuite, APRES le compte rendu, insere une ligne contenant EXACTEMENT :\n"
+    + RECO_MARKER + "\n"
+    "puis une section « Recommandations de prise en charge » fondee sur les "
+    "DERNIERES recommandations europeennes applicables au vu des resultats : "
+    "valvulopathies (ESC/EACTS 2021), cardiomyopathies dont CMH (ESC 2023), "
+    "insuffisance cardiaque (ESC 2021/2023), et tout element pertinent en "
+    "echocardiographie. Sois concis et actionnable : seuils/grades utiles, "
+    "surveillance recommandee, indications chirurgicales/interventionnelles "
+    "eventuelles. Mets les elements importants en gras (**...**). Si aucune "
+    "recommandation specifique ne s'applique, indique-le brievement."
+)
 
-    observations : constatations libres du medecin (ex. "hypokinesie basale
-    inferieure, fuite mitrale moderee") a integrer imperativement au CR."""
+
+def generate_full(text: str, cr_type: str | None = None, provider: str | None = None,
+                  model: str | None = None, observations: str | None = None,
+                  with_reco: bool = False, timeout: int = 180) -> tuple[str, str]:
+    """Genere le CR (system prompt du TYPE) et, si with_reco, une section de
+    RECOMMANDATIONS de prise en charge dans le MEME appel. Renvoie (cr_md, reco_md)
+    avec le gras markdown conserve. reco_md = "" si non demandee/absente.
+
+    observations : constatations libres du medecin a integrer imperativement."""
     cfg, _pid, meta, pcfg, mdl = _resolve(provider, None, model)
     system_prompt = cfg["system_prompts"].get(cr_type or "", "")
     user = text
@@ -221,9 +237,22 @@ def generate(text: str, cr_type: str | None = None, provider: str | None = None,
             + "\n\n--- CONSTATATIONS DU MEDECIN (a integrer imperativement au "
             "compte rendu) ---\n" + observations.strip()
         )
-    # On CONSERVE le gras (**...**) : la version "texte brut" est derivee par
-    # to_plain() la ou il faut (.txt, apercu), le gras sert au courrier Word.
-    return _clean_keep_bold(_call(pcfg, meta, mdl, system_prompt, user, MAX_TOKENS, timeout))
+    if with_reco:
+        user += _RECO_INSTRUCTION
+    raw = _clean_keep_bold(_call(pcfg, meta, mdl, system_prompt, user, MAX_TOKENS, timeout))
+    if with_reco and RECO_MARKER in raw:
+        cr_md, _sep, reco_md = raw.partition(RECO_MARKER)
+        return cr_md.strip(), reco_md.strip()
+    return raw.strip(), ""
+
+
+def generate(text: str, cr_type: str | None = None, provider: str | None = None,
+             model: str | None = None, observations: str | None = None,
+             timeout: int = 180) -> str:
+    """Genere un CR (sans recommandations). Conserve le gras (**...**)."""
+    cr_md, _ = generate_full(text, cr_type, provider, model, observations,
+                             with_reco=False, timeout=timeout)
+    return cr_md
 
 
 def test_connection(provider: str | None = None, api_key: str | None = None,

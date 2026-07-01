@@ -223,6 +223,14 @@
             <button class="secondary" id="wfCrDownload">⬇ .txt</button>
             <button class="secondary" id="wfCrLetter">📄 Word (.rtf)</button>
           </div>
+          <div id="wfRecoRow" style="display:none">
+            <div class="spacer"></div>
+            <h2>🩺 Recommandations de prise en charge
+              <span style="font-weight:400;font-size:12px;color:var(--muted)">(IA — à vérifier, non contractuel)</span></h2>
+            <div id="wfRecoRich" class="cr-rich"></div>
+            <div class="spacer"></div>
+            <div class="row"><button id="wfRecoCopy">📋 Copier (avec gras)</button></div>
+          </div>
         </div>
       </div>
     </section>
@@ -337,6 +345,14 @@
         <button id="reportCopy">📋 Copier (avec gras)</button>
         <button class="secondary" id="reportDownload">⬇ .txt</button>
         <button class="secondary" id="reportLetter">📄 Word (.rtf)</button>
+      </div>
+      <div id="reportRecoRow" style="display:none">
+        <div class="spacer"></div>
+        <h2>🩺 Recommandations de prise en charge
+          <span style="font-weight:400;font-size:12px;color:var(--muted)">(IA — à vérifier, non contractuel)</span></h2>
+        <div id="reportRecoRich" class="cr-rich"></div>
+        <div class="spacer"></div>
+        <div class="row"><button id="reportRecoCopy">📋 Copier (avec gras)</button></div>
       </div>
     </section>
   </div>
@@ -804,6 +820,8 @@ async function runGenerate(){
     $('reportOut').value = d.report || '';
     reportMd = d.report_md || d.report || '';   // version avec gras (liseuse + courrier)
     $('reportRich').innerHTML = crToHtml(reportMd);
+    reportRecoMd = d.reco_md || '';
+    showReco(reportRecoMd, 'reportRecoRow', 'reportRecoRich');
     $('reportRow').style.display = 'grid';
     $('reportRow').scrollIntoView({ behavior:'smooth', block:'start' });
     return true;
@@ -816,6 +834,7 @@ async function runGenerate(){
 }
 $('generate').onclick = runGenerate;
 $('reportCopy').onclick = () => copyRich(reportMd, $('reportCopy'), 'reportRich');
+$('reportRecoCopy').onclick = () => copyRich(reportRecoMd, $('reportRecoCopy'), 'reportRecoRich');
 $('reportDownload').onclick = () => {
   const blob = new Blob([$('reportOut').value], {type:'text/plain;charset=utf-8'});
   const a = document.createElement('a');
@@ -826,7 +845,14 @@ $('reportDownload').onclick = () => {
 $('reportLetter').onclick = () => downloadCourrier(reportMd || $('reportOut').value, 'Courrier_CR');
 
 // --- Courrier Word : CR avec valeurs en GRAS (markdown **...** -> RTF) ---
-let reportMd = '', wfReportMd = '';
+let reportMd = '', wfReportMd = '', reportRecoMd = '', wfRecoMd = '';
+
+// Affiche (ou masque) une section de recommandations à partir du markdown.
+function showReco(md, rowId, richId){
+  const has = md && md.trim();
+  if (has) document.getElementById(richId).innerHTML = crToHtml(md);
+  document.getElementById(rowId).style.display = has ? 'block' : 'none';
+}
 function crToRtf(md){
   md = md || '';
   const esc = s => {
@@ -1392,6 +1418,7 @@ async function selectExam(id){
   $('wfPills').innerHTML = ''; $('wfGenMsg').textContent = '';
   $('wfObs').value = ''; $('wfCrRow').style.display = 'none';
   $('wfCr').value = ''; $('wfCrRich').innerHTML = ''; wfReportMd = '';
+  $('wfRecoRow').style.display = 'none'; $('wfRecoRich').innerHTML = ''; wfRecoMd = '';
   $('wfAnonViewer').innerHTML = '<div class="loading">Chargement…</div>';
   $('wfSrcViewer').innerHTML = '';
   setWfView('anon');
@@ -1447,6 +1474,8 @@ $('wfGen').onclick = async () => {
     $('wfCr').value = d.report || '';
     wfReportMd = d.report_md || d.report || '';   // version avec gras (liseuse + courrier)
     $('wfCrRich').innerHTML = crToHtml(wfReportMd);
+    wfRecoMd = d.reco_md || '';
+    showReco(wfRecoMd, 'wfRecoRow', 'wfRecoRich');
     $('wfCrRow').style.display = 'block';
     $('wfGenMsg').innerHTML = '<span class="exists-ok">✓ CR enregistré : '+esc(d.cr_filename||'')+'</span>';
     $('wfCrRow').scrollIntoView({ behavior:'smooth', block:'start' });
@@ -1459,6 +1488,7 @@ $('wfGen').onclick = async () => {
   }
 };
 $('wfCrCopy').onclick = () => copyRich(wfReportMd, $('wfCrCopy'), 'wfCrRich');
+$('wfRecoCopy').onclick = () => copyRich(wfRecoMd, $('wfRecoCopy'), 'wfRecoRich');
 $('wfCrDownload').onclick = () => {
   const blob = new Blob([$('wfCr').value], {type:'text/plain;charset=utf-8'});
   const a = document.createElement('a');
