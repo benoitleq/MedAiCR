@@ -127,6 +127,9 @@ def _candidates(directory: Path, recursive: bool) -> list[Path]:
     return out
 
 
+_SLOW_WALK_SECONDS = 1.0   # au-dela, un dossier est juge "lent" (reseau) -> optimise
+
+
 def _resolve_type(raw: str, cr_type: str) -> str | None:
     if cr_type == "auto":
         return detect_type(raw)
@@ -257,16 +260,20 @@ def _scan_once() -> None:
             continue  # injoignable : baseline NON figee, on retentera au prochain scan
         root = str(directory)
         try:
-            root_mtime = directory.stat().st_mtime
+            root_mtime = directory.stat().st_mtime  # os.stat FRAIS = fiable (racine)
         except OSError:
             continue
         dir_first = root not in _BASELINED_DIRS  # 1ere lecture reussie de ce dossier
         state = _DIR_STATE.get(root)
 
-        # Rien n'a change a la racine -> on reutilise le dernier parcours (pas de
-        # walk recursif, instantane), sauf 1ere lecture ou re-scan force.
+        # Reutilisation SEULEMENT pour les dossiers LENTS (reseau), quand la mtime
+        # racine n'a pas bouge : les nouveaux examens y arrivent comme de nouveaux
+        # sous-dossiers -> la mtime racine change bien. Les dossiers RAPIDES (locaux)
+        # sont TOUJOURS reparcourus : le walk y est quasi instantane, donc detection
+        # fiable meme d'un fichier depose dans un sous-dossier existant (la mtime
+        # d'un sous-dossier n'est PAS fiable via scandir sous Windows -> cache).
         if state is not None and not dir_first and not force_full \
-                and state["mtime"] == root_mtime:
+                and state.get("slow") and state["mtime"] == root_mtime:
             for m, eid in state["pairs"]:
                 if eid not in seen_ids:
                     seen_ids.add(eid)
@@ -276,6 +283,7 @@ def _scan_once() -> None:
         cr_type = entry.get("cr_type", "auto")
         recursive = bool(entry.get("recursive", True))
         dir_pairs: list[tuple[float, str]] = []
+        _t0 = time.time()
         for pdf in _candidates(directory, recursive):
             eid = _exam_id(pdf)
             if eid in seen_ids:
@@ -301,7 +309,8 @@ def _scan_once() -> None:
             dir_pairs.append((arrival, eid))
         if dir_first:
             _BASELINED_DIRS.add(root)
-        _DIR_STATE[root] = {"mtime": root_mtime, "pairs": dir_pairs}
+        _DIR_STATE[root] = {"mtime": root_mtime, "pairs": dir_pairs,
+                            "slow": (time.time() - _t0) > _SLOW_WALK_SECONDS}
         pairs.extend(dir_pairs)
 
     pairs.sort(key=lambda x: x[0], reverse=True)
