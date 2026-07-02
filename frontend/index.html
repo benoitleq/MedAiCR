@@ -23,7 +23,7 @@
     background:rgba(52,211,153,.12); border:1px solid rgba(52,211,153,.3);
     padding:2px 8px; border-radius:999px;
   }
-  main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+  main { max-width: 1500px; margin: 0 auto; padding: 24px; }
   .grid { display:grid; grid-template-columns: 1fr 1fr; gap:20px; }
   @media (max-width: 860px){ .grid{ grid-template-columns:1fr; } }
   .card {
@@ -109,8 +109,10 @@
   .filename { font-size:13px; color:var(--ok); margin-top:8px; }
 
   /* ---- Workflow (style logiciel pro : liste a gauche, interpretation a droite) ---- */
-  .wf { display:grid; grid-template-columns: 320px 1fr; gap:18px; align-items:start; }
-  @media (max-width: 860px){ .wf { grid-template-columns:1fr; } }
+  .wf { display:grid; grid-template-columns: 300px 1fr 1fr; gap:18px; align-items:start; }
+  @media (max-width: 1250px){ .wf { grid-template-columns: 280px 1fr; }
+    .wf-cr { grid-column: 1 / -1; } }   /* CR passe en pleine largeur sous les 2 colonnes */
+  @media (max-width: 720px){ .wf { grid-template-columns:1fr; } .wf-cr { grid-column:auto; } }
   .wf-list { display:flex; flex-direction:column; position:sticky; top:16px;
     max-height: calc(100vh - 150px); }
   .wf-listhead { display:flex; justify-content:space-between; align-items:center; }
@@ -211,26 +213,29 @@
           <button id="wfGen">🧠 Générer le CR (IA)</button>
           <span class="cfg-msg" id="wfGenMsg"></span>
         </div>
+      </div>
+    </section>
 
-        <div id="wfCrRow" style="display:none">
+    <!-- COLONNE 3 : CR généré (IA) + aide au diagnostic -->
+    <section class="card wf-cr">
+      <div id="wfCrEmpty" class="muted-box">Le compte rendu généré (et l'aide au diagnostic) apparaîtra ici après « 🧠 Générer le CR ».</div>
+      <div id="wfCrRow" style="display:none">
+        <h2>🧠 Compte rendu généré</h2>
+        <textarea id="wfCr" readonly style="display:none"></textarea>
+        <div id="wfCrRich" class="cr-rich"></div>
+        <div class="spacer"></div>
+        <div class="row">
+          <button id="wfCrCopy">📋 Copier (avec gras)</button>
+          <button class="secondary" id="wfCrDownload">⬇ .txt</button>
+          <button class="secondary" id="wfCrLetter">📄 Word (.rtf)</button>
+        </div>
+        <div id="wfRecoRow" style="display:none">
           <div class="spacer"></div>
-          <h2>🧠 Compte rendu généré</h2>
-          <textarea id="wfCr" readonly style="display:none"></textarea>
-          <div id="wfCrRich" class="cr-rich"></div>
+          <h2>🩺 Recommandations de prise en charge
+            <span style="font-weight:400;font-size:12px;color:var(--muted)">(IA — à vérifier, non contractuel)</span></h2>
+          <div id="wfRecoRich" class="cr-rich"></div>
           <div class="spacer"></div>
-          <div class="row">
-            <button id="wfCrCopy">📋 Copier (avec gras)</button>
-            <button class="secondary" id="wfCrDownload">⬇ .txt</button>
-            <button class="secondary" id="wfCrLetter">📄 Word (.rtf)</button>
-          </div>
-          <div id="wfRecoRow" style="display:none">
-            <div class="spacer"></div>
-            <h2>🩺 Recommandations de prise en charge
-              <span style="font-weight:400;font-size:12px;color:var(--muted)">(IA — à vérifier, non contractuel)</span></h2>
-            <div id="wfRecoRich" class="cr-rich"></div>
-            <div class="spacer"></div>
-            <div class="row"><button id="wfRecoCopy">📋 Copier (avec gras)</button></div>
-          </div>
+          <div class="row"><button id="wfRecoCopy">📋 Copier (avec gras)</button></div>
         </div>
       </div>
     </section>
@@ -1426,7 +1431,7 @@ async function selectExam(id){
   $('wfPanel').style.display = 'block';
   $('wfTitle').textContent = 'Chargement…';
   $('wfPills').innerHTML = ''; $('wfGenMsg').textContent = '';
-  $('wfObs').value = ''; $('wfCrRow').style.display = 'none';
+  $('wfObs').value = ''; $('wfCrRow').style.display = 'none'; $('wfCrEmpty').style.display = 'block';
   $('wfCr').value = ''; $('wfCrRich').innerHTML = ''; wfReportMd = '';
   $('wfRecoRow').style.display = 'none'; $('wfRecoRich').innerHTML = ''; wfRecoMd = '';
   $('wfAnonViewer').innerHTML = '<div class="loading">Chargement…</div>';
@@ -1486,6 +1491,7 @@ $('wfGen').onclick = async () => {
     $('wfCrRich').innerHTML = crToHtml(wfReportMd);
     wfRecoMd = d.reco_md || '';
     showReco(wfRecoMd, 'wfRecoRow', 'wfRecoRich');
+    $('wfCrEmpty').style.display = 'none';
     $('wfCrRow').style.display = 'block';
     $('wfGenMsg').innerHTML = '<span class="exists-ok">✓ CR enregistré : '+esc(d.cr_filename||'')+'</span>';
     $('wfCrRow').scrollIntoView({ behavior:'smooth', block:'start' });
